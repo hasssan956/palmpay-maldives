@@ -1,0 +1,21 @@
+modules = ["nodejs-20"]
+run = "npm start"
+entrypoint = "src/server.js"
+hidden = [".config", "package-lock.json", "data"]
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+PORT = "3000"
+
+# Cheapest shareable link: Autoscale, max 1 instance, JSON snapshot kept in
+# App Storage (see docs/ARCHITECTURE.md, "Running it on Replit for little money").
+[deployment]
+deploymentTarget = "autoscale"
+build = ["npm", "ci", "--omit=dev"]
+run = ["npm", "start"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80

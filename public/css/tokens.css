@@ -1,0 +1,48 @@
+/* PalmPay Maldives design tokens.
+   Palette: deep-channel blue (where the reef drops off), lagoon turquoise,
+   midday sun, cool sandbar white. One family for numbers and headings
+   (Bricolage Grotesque), one for interface text (Figtree). */
+
+:root {
+  --abyss: #0a2342;      /* headers, primary text, terminal panel */
+  --channel: #133a66;    /* account card, raised dark surfaces */
+  --channel-2: #1d4a7d;
+  --lagoon: #2ec4b6;     /* brand accent, success, palm ID */
+  --lagoon-ink: #0b8378; /* lagoon as text on light surfaces (AA) */
+  --lagoon-wash: #dff6f3;
+  --sun: #ffc857;        /* scan progress, live highlights */
+  --sun-ink: #8a5a00;
+  --sand: #eef3f2;       /* app background */
+  --shell: #ffffff;      /* panels */
+  --ink: #0a2342;
+  --ink-2: #33475e;
+  --muted: #5d6d80;
+  --line: #dbe4e5;
+  --danger: #c63d4b;
+  --danger-wash: #fbe9eb;
+
+  --font-display: 'Bricolage Grotesque', 'Figtree', system-ui, sans-serif;
+  --font-ui: 'Figtree', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Type scale (1.25) */
+  --t-xs: 0.75rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.25rem;
+  --t-xl: 1.5625rem;
+  --t-2xl: 1.953rem;
+  --t-3xl: 2.441rem;
+  --t-4xl: 3.052rem;
+
+  /* Radii carry hierarchy: sheets > cards > controls > chips */
+  --r-sheet: 28px;
+  --r-card: 20px;
+  --r-control: 14px;
+  --r-chip: 999px;
+
+  --shadow-raise: 0 1px 0 rgba(10, 35, 66, 0.04), 0 8px 24px -12px rgba(10, 35, 66, 0.28);
+  --shadow-float: 0 18px 50px -18px rgba(10, 35, 66, 0.55);
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --app-width: 440px;
+}

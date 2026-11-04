@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a2342">
+  <title>PalmPay Maldives</title>
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Figtree:wght@400..700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div class="home" id="home">
+    <div id="contour"></div>
+    <header class="home-top">
+      <span class="brand" id="brand"><span class="brand-name">PalmPay <span>Maldives</span></span></span>
+      <span class="live" id="live" style="color:rgba(255,255,255,.7)"><i></i>Checking server</span>
+    </header>
+    <section class="home-hero">
+      <h1>Pay with<br>an open hand.</h1>
+      <p>Palm payments that plug into the bank apps people already use. Switch it on once in your bank’s app, then pay at the counter with your hand. The money comes straight from your bank account.</p>
+    </section>
+    <nav class="doors" aria-label="Prototype screens" id="doors"></nav>
+    <footer class="home-foot">
+      <span>Prototype. Banks and balances are simulated; no real money moves. Open the bank app on a second screen to watch payments land live.</span>
+      <button id="reset" hidden>Reset demo data</button>
+    </footer>
+  </div>
+  <script type="module">
+    import { icon, brandMark } from '/js/ui/icons.js';
+    import { contourSVG } from '/js/ui/contour.js';
+    import { api, getConfig } from '/js/api.js';
+
+    document.getElementById('brand').insertAdjacentHTML('afterbegin', brandMark());
+    document.getElementById('contour').outerHTML = contourSVG('palmpay-maldives', { width: 600, height: 600, rings: 18, opacity: 0.32 });
+    const doors = [
+      ['/bank', 'palm', 'Bank app with PalmPay', 'A demo bank app. Switch PalmPay on and watch payments arrive.'],
+      ['/terminal', 'store', 'Shop counter', 'Type an amount and take a palm payment.'],
+    ];
+    document.getElementById('doors').innerHTML = doors.map(([href, ic, t, s]) => `
+      <a class="door" href="${href}"><span class="ico">${icon(ic)}</span><span><strong>${t}</strong><small>${s}</small></span>${icon('chevron', 'chev')}</a>`).join('');
+
+    const live = document.getElementById('live');
+    api('/health').then(() => { live.classList.add('on'); live.lastChild.textContent = 'Server online'; })
+      .catch(() => { live.lastChild.textContent = 'Server offline'; });
+
+    getConfig().then((c) => {
+      const btn = document.getElementById('reset');
+      if (!c.allowReset) return;
+      btn.hidden = false;
+      btn.addEventListener('click', async () => {
+        btn.textContent = 'Resetting';
+        await api('/admin/reset', { method: 'POST' });
+        try { localStorage.removeItem('palmpay.bankSession'); } catch {}
+        btn.textContent = 'Demo data reset';
+      });
+    });
+  </script>
+</body>
+</html>

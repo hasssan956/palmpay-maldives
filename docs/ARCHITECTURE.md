@@ -1,0 +1,132 @@
+# PalmPay Maldives: architecture
+
+## What PalmPay is
+
+PalmPay is a palm payment layer that **plugs into the bank apps people already use**, such as BML's and MIB's. It is not a wallet. Money stays in the customer's bank account. PalmPay does three things:
+
+1. **Inside the bank's app:** the customer switches PalmPay on, picks the account to pay from, sets a per-payment limit and scans their palm once. They can change the account or limit, or turn it off (which deletes the palm template).
+2. **At the shop counter:** the cashier enters the amount, the customer holds up their palm, and PalmPay works out who it is.
+3. **Between the banks:** PalmPay asks the customer's bank to approve the debit. If the shop banks elsewhere, the bank sends the money over Favara. PalmPay records the payment and notifies the bank, which shows it in its app.
+
+```
+ Customer's bank app (BML / MIB)           PalmPay platform                         Banks
+┌──────────────────────────────┐   ┌─────────────────────────────────────┐   ┌──────────────────────┐
+│ bank's own screens           │   │ Partner API  /api/v1                 │   │ Issuer (customer's    │
+│  accounts, statement  ───────┼───┼──────────────────────────────────────┼──▶│ bank) core banking:   │
+│                              │   │  enrolments, palm settings  ◀── bank │   │ approve + debit       │
+│ PalmPay module (from PalmPay)│──▶│  payment intents, authorize ◀── shop │   │        │ Favara       │
+│  set up, account, limit, off │   │                                      │   │        ▼              │
+└──────────────────────────────┘   │ Services: palm-users, payments       │   │ Acquirer (shop's      │
+                                   │ Ports:  Store │ BiometricMatcher │   │   │ bank): credit shop    │
+ Shop counter / bank card terminal │         BankConnector │ EventBus     │   └──────────────────────┘
+┌──────────────────────────────┐   │                                      │
+│ amount → palm scan → receipt │──▶│ Events → bank (webhook / SSE)        │
+└──────────────────────────────┘   └─────────────────────────────────────┘
+```
+
+## How the prototype maps to the real thing
+
+| In the prototype | Plays the part of | In production |
+|---|---|---|
+| `/bank`: the demo bank app | BML's or MIB's mobile app | The bank adds PalmPay's module to its own app (native SDK, or PalmPay screens opened inside the app) |
+| `/sim-bank/*` and `src/sim-banks/` | Each bank's own backend and core banking | Removed. PalmPay calls the bank's real API |
+| `adapters/banks/simulated-connector.js` | PalmPay's connection to the banks | A connector per bank, calling its API over mutual TLS |
+| `/terminal`: the shop counter | A bank-issued card terminal with a palm scanner | Palm becomes one more way to pay on the terminal, next to card and QR |
+| Demo partner keys in `/config` | Credentials per bank and per terminal | Keys held by bank backends and terminals, never by the customer's phone |
+| SSE `/api/v1/events` | Notifications to the bank | Signed webhooks to each bank's backend, which pushes to its app |
+
+## Decisions that keep scaling cheap
+
+| Decision | Why it matters |
+|---|---|
+| **PalmPay holds no balances.** It stores the bank's reference for the customer and the chosen account, nothing else about money. | Banks keep control of funds and approvals, which is what they and the regulator expect. PalmPay never needs to be a deposit-taker. |
+| **BankConnector port.** Three methods: `describe`, `verifyAccount`, `authorizeDebit`. | Adding a bank, or moving from simulated to real, is one new adapter file. |
+| **Account verified by the bank at enrolment.** The bank confirms the account belongs to that customer. | Nobody can link someone else's account to their palm. |
+| **Payment intents with a lifecycle and idempotency keys.** `requires_palm → processing → succeeded / failed / canceled / expired`. The bank call uses the intent id as its idempotency key. | A retry on bad Wi-Fi or a double tap can never charge twice, at PalmPay or at the bank. |
+| **Bank call outside any lock.** Identify and check (unit of work 1), call the bank, record the outcome (unit of work 2). | A slow bank can't freeze other payments. The `processing` status blocks a second authorise for the same intent. |
+| **Scoped access.** A bank key only sees its own customers. A terminal key only sees its own shop's payments. | This is the boundary that has to hold once real banks connect, and it is already tested. |
+| **Biometric matcher is a port.** | Demo: hand geometry from the camera. Production: a palm-vein vendor SDK, with templates held by the vendor. |
+| **Transactional outbox.** `payment.succeeded`, `payment_intent.failed`, `palm.enrolled`, `palm.deleted`. | The same events become bank webhooks, fraud scoring and reporting. |
+| **Integer laari, versioned API (`/api/v1`), all settings in `src/config.js`.** | No rounding bugs, room for v2, and hardening is mostly switching demo options off. |
+
+## The payment flow
+
+1. The cashier types the amount. The terminal calls `POST /api/v1/payment-intents` with its key and an `Idempotency-Key`.
+2. The scan screen opens the camera. MediaPipe HandLandmarker finds 21 hand points per frame. `shared/palm-features.js` turns them into 23 bone and palm length ratios, and 18 good frames are combined.
+3. `POST /payment-intents/:id/authorize { palm }`. PalmPay identifies the palm user (best match under the threshold, clearly ahead of the runner-up) and checks the customer's limit. It marks the intent `processing`.
+4. PalmPay calls `authorizeDebit` on the customer's bank. If the shop banks with the same bank, the transfer stays inside it. If not, the issuer sends the money over Favara and the acquirer credits the shop.
+5. PalmPay records the payment (approval code, route) and emits `payment.succeeded`. The bank app shows a notification and its balance drops. The terminal prints the receipt.
+
+Declines are explicit: `palm_not_recognised` (after 3 tries), `palm_ambiguous`, `over_palm_limit` (PalmPay), and `insufficient_funds` or `account_blocked` (the bank).
+
+## Partner API (v1)
+
+| Caller | Method and path | Purpose |
+|---|---|---|
+| Bank | `POST /enrollments` | Turn on PalmPay: `{ bankCustomerRef, name, accountRef, limit, consent, palm }` |
+| Bank | `GET /palm-users?bankCustomerRef=` | Is this customer on PalmPay? |
+| Bank | `GET / PATCH / DELETE /palm-users/:id` | Read, change account or limit, turn off (deletes the template) |
+| Bank | `GET /palm-users/:id/payments` | Palm payment history for the app |
+| Terminal | `POST /payment-intents`, `POST /payment-intents/:id/authorize`, `POST /payment-intents/:id/cancel` | Take a payment |
+| Bank or terminal | `GET /payments/:id`, `GET /events` | Receipt data, live events |
+
+All calls send `Authorization: Bearer <key>`.
+
+## What the biometric layer really is
+
+Hand geometry from a phone camera is **demo grade**. It is good for showing the experience to banks and investors with a few enrolled people. It is **not** secure enough for real money: there is no liveness check, a photo of a hand may pass, and similar hands can be confused. The scan screen shows the match distance so `MATCH_THRESHOLD` can be tuned with real people. Keep `DEMO_MODE` on so a demo never stalls on lighting.
+
+Production needs dedicated scanners at counters and a vendor SDK, ideally palm vein (it reads under the skin and is hard to fake). Vendors selling SDKs or APIs include Tencent PalmAI, Fujitsu PalmSecure, Keyo and Redrock Biometrics. Enrolment would also move to a vendor-approved flow. Some vendors allow enrolling with a phone camera; others need a scanner at a branch or shop.
+
+## Running it on Replit for little money
+
+Replit cut its usage prices on 1 August 2026. These are its published usage rates; your plan's monthly fee and included credits come on top.
+
+| Stage | How to run | Data | Approximate usage cost |
+|---|---|---|---|
+| Build and rehearse | Press **Run** in the workspace. The dev URL is HTTPS, so phone cameras work. | `data/palmpay.json`, `data/sim-banks.json` | Nothing beyond your plan |
+| Shareable demo link | **Autoscale**, max instances **1**, `STORE_PERSISTENCE=replit-object-storage` plus an App Storage bucket (Autoscale disks are wiped when an instance stops) | Two JSON snapshots in App Storage | $1/month base + $0.60 per million compute units + $0.40 per million requests; storage $0.015 per GiB-month |
+| Always-on demo | Reserved VM, 0.5 vCPU | Same | $0.0208/hour, about $15/month |
+| Pilot | Autoscale or Reserved VM + Replit PostgreSQL | Postgres adapter | Database $0.16 per active compute hour, storage $0.35 per GiB-month |
+
+Keep max instances at 1 while the event bus is in-memory. The MediaPipe runtime is served from the app; the hand model (about 8 MB) loads from Google's public model bucket unless `HAND_MODEL_URL` points to a copy in `public/`.
+
+## Path to production
+
+**Phase 1: pilot with one bank, mock money**
+- `postgres-store.js` against `db/migrations/001_init.sql`.
+- Embedding: a small SDK or hosted PalmPay screens the bank opens in its app, signed with a short-lived token from the bank's backend. The phone never holds an API key.
+- Webhooks to the bank instead of SSE, signed with a shared secret.
+- Turn off `DEMO_MODE`, `ALLOW_RESET` and `EXPOSE_MATCH_DEBUG`. Stop storing palm snapshots. Hash API keys.
+
+**Phase 2: real money**
+- A real connector for each bank's authorise-and-debit API. Favara routing is done by the banks.
+- Scanner hardware and a palm-vein vendor SDK at counters, starting with terminals the acquiring bank already runs.
+- Redis or Postgres LISTEN/NOTIFY event bus, several instances, monitoring, daily reconciliation of `payments` against bank reports.
+- Regulation: talk to the Maldives Monetary Authority early about the licence or sandbox this needs. Biometric data needs explicit consent (captured at enrolment), deletion on request (built in), and a data-protection review with counsel.
+
+## Folder map
+
+```
+src/
+  config.js                every setting
+  ports.js                 the contracts (documentation)
+  container.js             picks adapters from config
+  domain/                  money, ids, errors
+  services/palm-users.js   enrolment, account/limit changes, turning off
+  services/payments.js     intents, identify, bank authorisation, outcome
+  adapters/store/          generic JSON store, PalmPay repos, persistence
+  adapters/banks/          simulated-connector.js (real connectors go here)
+  adapters/biometrics/     hand-geometry-matcher.js
+  adapters/events/         memory-bus.js
+  sim-banks/               STAND-IN for BML/MIB core banking (demo only)
+  http/app.js              /api/v1 partner API, /sim-bank demo backend, static files
+shared/palm-features.js    palm feature extraction (browser + tests)
+public/                    /bank demo bank app, /terminal shop counter
+db/migrations/             PostgreSQL schema for PalmPay's data
+test/                      node:test suite
+```
+
+## Design notes
+
+The demo bank app follows the patterns customers know from Maldivian banking apps: a dark header with the account card, a hide-balance toggle, quick actions, grouped activity, a bottom tab bar with a raised centre action, and pop-down payment notifications. It is deliberately a neutral "demo bank app" with no BML or MIB names in its branding, colours or logos; the banks appear only as "(simulated)" labels. The **App colours** setting (Lagoon, Hibiscus, Mangrove) shows how the PalmPay module takes on a host bank's palette, while the PalmPay mark stays the same.

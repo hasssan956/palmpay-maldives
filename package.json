@@ -1,0 +1,21 @@
+{
+  "name": "palmpay-maldives",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PalmPay Maldives MVP: scan-palm-to-pay proof of concept",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
+    "reset": "node src/seed.js --reset"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
+    "express": "^5.1.0"
+  },
+  "optionalDependencies": {
+    "@replit/object-storage": "^1.0.0"
+  }
+}
