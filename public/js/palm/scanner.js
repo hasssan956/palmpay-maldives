@@ -20,6 +20,8 @@ const HINTS = {
   fingers_closed: ['Spread your fingers', 'Keep your hand flat and open.'],
   reading: ['Hold still', 'Reading your palm.'],
   unsteady: ['Keep your hand steady', 'Starting the reading again.'],
+  two_hands: ['Show one hand only', 'Keep your other hand out of view.'],
+  mixed_hands: ['Use one hand', 'Keep the same hand in view until the reading finishes.'],
 };
 
 const CONNECTIONS = [
@@ -37,7 +39,7 @@ async function getLandmarker(modelUrl) {
         HandLandmarker.createFromOptions(fileset, {
           baseOptions: { modelAssetPath: modelUrl, delegate },
           runningMode: 'VIDEO',
-          numHands: 1,
+          numHands: 2, // detect two so we can ask for one, instead of silently picking either
           minHandDetectionConfidence: 0.6,
           minHandPresenceConfidence: 0.6,
           minTrackingConfidence: 0.5,
@@ -108,6 +110,7 @@ export class PalmScanner {
 
   reset() {
     this.frames = [];
+    this.hands = [];
     this.onProgress(0);
     this.viewport.classList.remove('locked');
   }
@@ -130,13 +133,13 @@ export class PalmScanner {
   handleFrame(result) {
     const image = result.landmarks?.[0];
     const world = result.worldLandmarks?.[0];
-    const hand = result.handedness?.[0]?.[0]?.categoryName;
+    const side = result.handedness?.[0]?.[0];
     this.draw(image);
 
-    const problem = frameProblem(image);
+    const problem = (result.landmarks?.length || 0) > 1 ? 'two_hands' : frameProblem(image);
     if (problem) {
       this.missing++;
-      if (this.missing > 8 && this.frames.length) this.reset();
+      if ((this.missing > 8 || problem === 'two_hands') && this.frames.length) this.reset();
       this.onHint(...HINTS[problem]);
       return;
     }
@@ -144,6 +147,7 @@ export class PalmScanner {
     const vector = extractFeatures(world);
     if (!vector) return;
     this.frames.push(vector);
+    if (side && side.score >= 0.6) (this.hands ||= []).push(side.categoryName);
     this.viewport.classList.add('locked');
     this.onHint(...HINTS.reading);
     this.onProgress(this.frames.length / TARGET_FRAMES);
@@ -154,6 +158,14 @@ export class PalmScanner {
       if (spread > MAX_SPREAD) {
         this.reset();
         this.onHint(...HINTS.unsteady);
+        return;
+      }
+      // Which hand is it? Majority vote across frames. The label is only used to
+      // compare with the label recorded at enrolment, so it just has to be consistent.
+      const hand = majority(this.hands || []);
+      if (!hand) {
+        this.reset();
+        this.onHint(...HINTS.mixed_hands);
         return;
       }
       const probe = { model: FEATURE_MODEL, vector: median, hand, quality: { frames: this.frames.length, spread } };
@@ -220,6 +232,14 @@ export class PalmScanner {
     this.pause();
     this.stopCamera();
   }
+}
+
+function majority(labels) {
+  if (labels.length < 6) return null;
+  const left = labels.filter((l) => l === 'Left').length;
+  const share = Math.max(left, labels.length - left) / labels.length;
+  if (share < 0.75) return null;
+  return left * 2 > labels.length ? 'Left' : 'Right';
 }
 
 export class ScanError extends Error {

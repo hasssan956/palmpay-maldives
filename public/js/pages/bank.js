@@ -224,7 +224,7 @@ function palmPaySetup() {
         </div>
         <ol class="how">
           <li><strong>Choose an account</strong><span>Payments come straight from it. No new wallet to top up.</span></li>
-          <li><strong>Scan your palm once</strong><span>Your phone camera reads it in about two seconds.</span></li>
+          <li><strong>Scan one palm</strong><span>Use the hand you’ll pay with. Only that hand can pay.</span></li>
           <li><strong>Pay with your hand</strong><span>You get a notification here for every payment.</span></li>
         </ol>
         <div class="stack"><button class="btn btn-primary btn-block" data-act="setup-next">Set up PalmPay</button></div>
@@ -266,7 +266,7 @@ function palmPayOn() {
       <div class="palm-hero">
         <div class="palm-photo">${u.palm.snapshot ? `<img src="${u.palm.snapshot}" alt="Your registered palm">` : icon('palm')}</div>
         <h2>PalmPay is on</h2>
-        <p>Hold up your open hand at any PalmPay counter.${u.palm.mode === 'simulated' ? ' This demo profile has no palm scan yet; shops can simulate it.' : ''}</p>
+        <p>Hold up the hand you registered, open and flat, at any PalmPay counter.${u.palm.mode === 'simulated' ? ' This demo profile has no palm scan yet; shops can simulate it.' : ''}</p>
       </div>
       <div class="settings">
         <button class="setting" data-act="edit" data-what="account">
@@ -327,7 +327,7 @@ async function runSetupScan() {
       };
       try {
         const u = await api('/enrollments', { method: 'POST', body, key: state.key });
-        return { ok: true, value: u, title: 'PalmPay is on', message: 'You can now pay with your hand.' };
+        return { ok: true, value: u, title: 'PalmPay is on', message: 'Pay with the same hand you just scanned.' };
       } catch (err) {
         return { ok: false, retry: err.code === 'invalid_request', title: 'Could not finish setup', message: err.message };
       }

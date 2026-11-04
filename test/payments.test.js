@@ -117,3 +117,15 @@ test('simulated scans are refused when demo mode is off', async () => {
   const pi = await c.payments.createIntent(CAFE, { amount: 2500 });
   await assert.rejects(c.payments.authorize(CAFE, pi.id, { demo: { palmUserId: 'x' } }), (e) => e.code === 'demo_disabled');
 });
+
+test('only the registered hand can pay; the other hand gets a clear message', async () => {
+  const c = await testContainer();
+  const hand = makeHand(31);
+  await c.palmUsers.enroll(MIB, { bankCustomerRef: 'mib_c_mariyam', name: 'Mariyam Shaheen', accountRef: 'mib_a_mariyam_cur', palm: probeFor(hand, 20, 'Right'), consent });
+  const pi = await c.payments.createIntent(CAFE, { amount: 2000 });
+  const wrong = await c.payments.authorize(CAFE, pi.id, { palm: probeFor(hand, 20, 'Left') });
+  assert.equal(wrong.intent.status, 'requires_palm');
+  assert.equal(wrong.intent.lastError.code, 'palm_wrong_hand');
+  const right = await c.payments.authorize(CAFE, pi.id, { palm: probeFor(hand, 20, 'Right') });
+  assert.equal(right.intent.status, 'succeeded');
+});

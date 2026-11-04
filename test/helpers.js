@@ -60,7 +60,7 @@ export function landmarksFor(hand, noise = 0.004, rng = Math.random) {
   return pts.map((q) => ({ x: q.x * k + n(), y: q.y * k + n(), z: n() }));
 }
 
-export function probeFor(hand, frames = 20) {
+export function probeFor(hand, frames = 20, side = 'Right') {
   const vectors = Array.from({ length: frames }, () => extractFeatures(landmarksFor(hand)));
-  return { model: FEATURE_MODEL, vector: medianVector(vectors), hand: 'Right', quality: { frames, spread: 0.02 } };
+  return { model: FEATURE_MODEL, vector: medianVector(vectors), hand: side, quality: { frames, spread: 0.02 } };
 }

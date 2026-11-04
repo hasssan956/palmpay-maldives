@@ -41,7 +41,9 @@ export const config = Object.freeze({
   biometricProvider: env.BIOMETRIC_PROVIDER || 'hand-geometry',
   matchThreshold: num(env.MATCH_THRESHOLD, 0.075),
   matchMargin: num(env.MATCH_MARGIN, 0.8),
-  duplicateThreshold: num(env.DUPLICATE_THRESHOLD, 0.045),
+  // Same as the match threshold by default: a palm close enough to pay as
+  // someone else is close enough to block a second enrolment.
+  duplicateThreshold: num(env.DUPLICATE_THRESHOLD, num(env.MATCH_THRESHOLD, 0.075)),
   handModelUrl:
     env.HAND_MODEL_URL ||
     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',

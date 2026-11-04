@@ -78,11 +78,14 @@ async function charge() {
         }
         if (pi.status === 'requires_palm') {
           const left = cfg.maxScanAttempts - pi.attempts;
-          const unclear = pi.lastError?.code === 'palm_ambiguous';
-          const bankDown = pi.lastError?.code === 'bank_unavailable';
-          return { ok: false, retry: true, debug: res.match,
-            title: bankDown ? 'Bank not reachable' : unclear ? 'Scan was unclear' : 'Palm not recognised',
-            message: bankDown ? 'Try again in a moment.' : `Hold the hand flat inside the outline. ${left > 0 ? `${left} ${left === 1 ? 'try' : 'tries'} left.` : ''}` };
+          const code = pi.lastError?.code;
+          const tries = left > 0 ? ` ${left} ${left === 1 ? 'try' : 'tries'} left.` : '';
+          const msg = {
+            bank_unavailable: ['Bank not reachable', 'Try again in a moment.'],
+            palm_wrong_hand: ['Use your other hand', `Pay with the same hand you registered in your bank app.${tries}`],
+            palm_ambiguous: ['Scan was unclear', `Hold the hand flat inside the outline.${tries}`],
+          }[code] || ['Palm not recognised', `Hold the hand flat inside the outline.${tries}`];
+          return { ok: false, retry: true, debug: res.match, title: msg[0], message: msg[1] };
         }
         const [title, message] = DECLINES[pi.failureReason] || ['Payment declined', 'Ask for another way to pay.'];
         return { ok: false, retry: false, title, message, debug: res.match, value: { status: 'declined', intent: pi, title, message } };

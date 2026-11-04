@@ -19,9 +19,18 @@ export function createHandGeometryMatcher({ threshold, margin, duplicateThreshol
   function rank(probe, templates) {
     return templates
       .filter((t) => t.model === FEATURE_MODEL)
-      .map((t) => ({ customerId: t.palmUserId ?? t.customerId, distance: round(relativeDistance(probe.vector, t.templateRef.vector)) }))
+      .map((t) => ({
+        customerId: t.palmUserId ?? t.customerId,
+        hand: t.templateRef.hand || null,
+        distance: round(relativeDistance(probe.vector, t.templateRef.vector)),
+      }))
       .sort((a, b) => a.distance - b.distance);
   }
+
+  // Left and right hands of one person are near mirror images, so their
+  // geometry is almost identical. The detector's left/right label is what
+  // tells them apart: a template only matches a probe of the same hand.
+  const sameHand = (probe) => (c) => !probe.hand || !c.hand || c.hand === probe.hand;
 
   return {
     model: FEATURE_MODEL,
@@ -39,10 +48,16 @@ export function createHandGeometryMatcher({ threshold, margin, duplicateThreshol
     },
 
     async identify(probe, templates) {
-      const candidates = rank(probe, templates);
+      const all = rank(probe, templates);
+      const candidates = all.filter(sameHand(probe));
       const [best, second] = candidates;
       const top = candidates.slice(0, 3);
-      if (!best || best.distance > threshold) return { status: 'no_match', distance: best?.distance, candidates: top, threshold };
+      if (!best || best.distance > threshold) {
+        // Close match on the other hand: the customer used the wrong hand.
+        const other = all.find((c) => !sameHand(probe)(c));
+        if (other && other.distance <= threshold) return { status: 'wrong_hand', distance: other.distance, candidates: top, threshold };
+        return { status: 'no_match', distance: best?.distance, candidates: top, threshold };
+      }
       if (second && best.distance > second.distance * margin) {
         return { status: 'ambiguous', distance: best.distance, candidates: top, threshold };
       }

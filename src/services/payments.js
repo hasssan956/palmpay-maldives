@@ -135,7 +135,7 @@ export function createPaymentService({ uow, matcher, banks, config }) {
           const failed = attempts >= config.maxScanAttempts;
           const updated = r.intents.update(id, {
             attempts, status: failed ? 'failed' : OPEN,
-            lastError: { code: match.status === 'ambiguous' ? 'palm_ambiguous' : 'palm_not_recognised', at: new Date().toISOString() },
+            lastError: { code: { ambiguous: 'palm_ambiguous', wrong_hand: 'palm_wrong_hand' }[match.status] || 'palm_not_recognised', at: new Date().toISOString() },
             failureReason: failed ? 'palm_not_recognised' : null,
           });
           r.outbox.add(failed ? 'payment_intent.failed' : 'payment_intent.scan_failed', {
