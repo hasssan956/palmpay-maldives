@@ -8,7 +8,7 @@ export function memoryPersistence() {
 }
 
 export async function testContainer(config = {}) {
-  const c = await buildContainer({ persistence: memoryPersistence, config: { demoMode: true, simBankLatencyMs: 0, ...config } });
+  const c = await buildContainer({ persistence: memoryPersistence, config: { demoMode: true, simBankLatencyMs: 0, livenessMode: 'off', ...config } });
   await seed(c);
   return c;
 }
