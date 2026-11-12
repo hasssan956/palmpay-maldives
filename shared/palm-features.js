@@ -97,4 +97,77 @@ export function spreadOf(vectors, median) {
   return round4(vectors.reduce((acc, v) => acc + relativeDistance(v, median), 0) / vectors.length);
 }
 
+// --- Liveness: tremor -------------------------------------------------------
+//
+// A real hand is never perfectly still. Muscles keep the fingers trembling and
+// drifting very slightly, and each finger moves a little on its own.
+// A photo or a screen showing a hand can be moved, tilted and zoomed, but it
+// moves as ONE flat sheet: every point follows the same straight-line
+// (affine) motion.
+//
+// So for each frame we find the affine transform that best maps it onto a
+// reference shape, and keep only what that transform cannot explain: the
+// fingers' independent motion. The score is how much that leftover motion
+// varies over the scan, in palm widths. Higher = more alive.
+//
+// Demo grade: the camera's own landmark noise adds to the score, and a video
+// of a real hand still passes. Tune MIN_TREMOR with real hands and photos.
+
+/**
+ * @param {{x:number,y:number}[][]} frames image landmarks (0..1) per frame, 21 points each
+ * @param {number} aspect video width / height, so x and y are in the same units
+ * @returns {number|null} tremor score in palm widths, or null if there are too few frames
+ */
+export function tremorScore(frames, aspect = 1) {
+  const pts = frames
+    .filter((f) => f && f.length === 21)
+    .map((f) => f.map((p) => [p.x * aspect, p.y]));
+  if (pts.length < 6) return null;
+
+  // Reference shape: align everything to the middle frame, average, align again.
+  let ref = pts[pts.length >> 1];
+  for (let pass = 0; pass < 2; pass++) {
+    const aligned = pts.map((f) => alignAffine(f, ref)).filter(Boolean);
+    if (aligned.length < 6) return null;
+    ref = ref.map((_, i) => [mean(aligned.map((a) => a[i][0])), mean(aligned.map((a) => a[i][1]))]);
+  }
+  const aligned = pts.map((f) => alignAffine(f, ref)).filter(Boolean);
+  const width = Math.hypot(ref[5][0] - ref[17][0], ref[5][1] - ref[17][1]);
+  if (aligned.length < 6 || !(width > 1e-6)) return null;
+
+  // For each landmark: how far does it wander (after alignment) around its own average?
+  let total = 0;
+  for (let i = 0; i < 21; i++) {
+    const mx = mean(aligned.map((a) => a[i][0]));
+    const my = mean(aligned.map((a) => a[i][1]));
+    total += Math.sqrt(mean(aligned.map((a) => (a[i][0] - mx) ** 2 + (a[i][1] - my) ** 2)));
+  }
+  return round4(total / 21 / width);
+}
+
+/** Least-squares affine map of `src` onto `dst`; returns the mapped points, or null if degenerate. */
+function alignAffine(src, dst) {
+  const n = src.length;
+  const sc = [mean(src.map((p) => p[0])), mean(src.map((p) => p[1]))];
+  const dc = [mean(dst.map((p) => p[0])), mean(dst.map((p) => p[1]))];
+  // M = (Σ d·sᵀ)(Σ s·sᵀ)⁻¹ on centred points
+  let sxx = 0, sxy = 0, syy = 0, dxsx = 0, dxsy = 0, dysx = 0, dysy = 0;
+  for (let i = 0; i < n; i++) {
+    const x = src[i][0] - sc[0], y = src[i][1] - sc[1];
+    const u = dst[i][0] - dc[0], v = dst[i][1] - dc[1];
+    sxx += x * x; sxy += x * y; syy += y * y;
+    dxsx += u * x; dxsy += u * y; dysx += v * x; dysy += v * y;
+  }
+  const det = sxx * syy - sxy * sxy;
+  if (!(Math.abs(det) > 1e-12)) return null;
+  const ia = syy / det, ib = -sxy / det, id = sxx / det; // inverse of [[sxx,sxy],[sxy,syy]]
+  const a = dxsx * ia + dxsy * ib, b = dxsx * ib + dxsy * id;
+  const c = dysx * ia + dysy * ib, d = dysx * ib + dysy * id;
+  return src.map(([px, py]) => {
+    const x = px - sc[0], y = py - sc[1];
+    return [a * x + b * y + dc[0], c * x + d * y + dc[1]];
+  });
+}
+
+const mean = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
 const round4 = (x) => Math.round(x * 10000) / 10000;

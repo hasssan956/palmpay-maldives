@@ -103,7 +103,11 @@ export function createPaymentService({ uow, matcher, banks, config }) {
       if (demo && !config.demoMode) throw new DomainError('demo_disabled', 'Simulated scans are turned off.', { status: 403 });
       if (!demo) {
         const check = matcher.validateProbe(palm);
-        if (!check.ok) throw invalid('The palm scan was not usable. Hold your whole hand inside the outline and scan again.', { reason: check.reason });
+        if (!check.ok) {
+          throw invalid(check.reason === 'not_live'
+            ? 'This did not look like a live hand. Hold your own hand up to the camera, not a photo or a screen.'
+            : 'The palm scan was not usable. Hold your whole hand inside the outline and scan again.', { reason: check.reason });
+        }
       }
 
       // --- Steps 1 + 2 ---

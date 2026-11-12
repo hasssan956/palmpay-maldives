@@ -3,8 +3,18 @@
 // the same three methods and call the vendor's API instead.
 import { FEATURE_MODEL, FEATURE_PAIRS, relativeDistance } from '../../../shared/palm-features.js';
 
-export function createHandGeometryMatcher({ threshold, margin, duplicateThreshold }) {
+export function createHandGeometryMatcher({ threshold, margin, duplicateThreshold, liveness = { mode: 'off' } }) {
   const expectedLength = FEATURE_PAIRS.length;
+
+  // Tremor liveness (see tremorScore in shared/palm-features.js). The scanner
+  // measures it; the server has the final say. "observe" records the score
+  // without blocking, so the threshold can be tuned with real hands first.
+  // A vendor SDK does its own, certified liveness instead.
+  function isLive(probe) {
+    if (liveness.mode !== 'enforce') return true;
+    const t = probe.liveness?.tremor;
+    return Number.isFinite(t) && t >= liveness.minTremor;
+  }
 
   function validateProbe(probe) {
     if (!probe || typeof probe !== 'object') return { ok: false, reason: 'missing_probe' };
@@ -13,6 +23,7 @@ export function createHandGeometryMatcher({ threshold, margin, duplicateThreshol
     if (!Array.isArray(v) || v.length !== expectedLength) return { ok: false, reason: 'bad_vector' };
     if (!v.every((x) => Number.isFinite(x) && x > 0 && x < 5)) return { ok: false, reason: 'bad_vector' };
     if (probe.quality && probe.quality.frames < 8) return { ok: false, reason: 'too_few_frames' };
+    if (!isLive(probe)) return { ok: false, reason: 'not_live' };
     return { ok: true };
   }
 

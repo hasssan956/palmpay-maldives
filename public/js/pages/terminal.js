@@ -90,7 +90,7 @@ async function charge() {
         const [title, message] = DECLINES[pi.failureReason] || ['Payment declined', 'Ask for another way to pay.'];
         return { ok: false, retry: false, title, message, debug: res.match, value: { status: 'declined', intent: pi, title, message } };
       } catch (err) {
-        return { ok: false, retry: err.code === 'invalid_request', title: 'Scan not usable', message: err.message };
+        return { ok: false, retry: err.code === 'invalid_request', title: err.details?.reason === 'not_live' ? 'Use your real hand' : 'Scan not usable', message: err.message };
       }
     },
   });

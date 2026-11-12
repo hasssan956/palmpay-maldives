@@ -74,7 +74,17 @@ All calls send `Authorization: Bearer <key>`.
 
 ## What the biometric layer really is
 
-Hand geometry from a phone camera is **demo grade**. It is good for showing the experience to banks and investors with a few enrolled people. It is **not** secure enough for real money: there is no liveness check, a photo of a hand may pass, and similar hands can be confused. The scan screen shows the match distance so `MATCH_THRESHOLD` can be tuned with real people. Keep `DEMO_MODE` on so a demo never stalls on lighting.
+Hand geometry from a phone camera is **demo grade**. It is good for showing the experience to banks and investors with a few enrolled people. It is **not** secure enough for real money: similar hands can be confused, and its liveness check is basic. The scan screen shows the match distance so `MATCH_THRESHOLD` can be tuned with real people.
+
+**Tremor liveness check.** A real hand never holds perfectly still: the fingers tremble and drift slightly, each on its own. A photo or a phone screen showing a hand moves as one flat sheet. `tremorScore` in `shared/palm-features.js` aligns every frame to a reference shape with a best-fit affine transform (which absorbs any moving, tilting or zooming of a flat picture) and measures the finger motion left over, in palm widths. The scanner sends the score with the probe; the matcher has the final say.
+
+| `LIVENESS_MODE` | What happens |
+|---|---|
+| `off` | No tremor check |
+| `observe` (default) | Score is measured and shown on the scan screen (`Tremor 0.0xx`), nothing is blocked |
+| `enforce` | Scans under `MIN_TREMOR` are refused, in the scanner and again on the server (`not_live`) |
+
+Tune it before enforcing: scan real hands and a photo of a hand on another phone, read the scores, set `MIN_TREMOR` between them, then switch to `enforce`. It stops still and hand-held photos and screens. It does not stop a video of a real hand, and the camera's own landmark noise adds to the score. Bank-grade liveness (tested to ISO 30107-3) comes with the palm-vein vendor SDK. Keep `DEMO_MODE` on so a demo never stalls on lighting.
 
 Production needs dedicated scanners at counters and a vendor SDK, ideally palm vein (it reads under the skin and is hard to fake). Vendors selling SDKs or APIs include Tencent PalmAI, Fujitsu PalmSecure, Keyo and Redrock Biometrics. Enrolment would also move to a vendor-approved flow. Some vendors allow enrolling with a phone camera; others need a scanner at a branch or shop.
 

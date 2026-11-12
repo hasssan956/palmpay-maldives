@@ -44,6 +44,10 @@ export const config = Object.freeze({
   // Same as the match threshold by default: a palm close enough to pay as
   // someone else is close enough to block a second enrolment.
   duplicateThreshold: num(env.DUPLICATE_THRESHOLD, num(env.MATCH_THRESHOLD, 0.075)),
+  // Tremor liveness check against photos and screens (demo grade).
+  //   off | observe (measure and show the score, never block) | enforce (block low scores)
+  livenessMode: ['off', 'observe', 'enforce'].includes(env.LIVENESS_MODE) ? env.LIVENESS_MODE : 'observe',
+  minTremor: num(env.MIN_TREMOR, 0.005), // palm widths; tune with the score shown on the scan screen
   handModelUrl:
     env.HAND_MODEL_URL ||
     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',

@@ -6,7 +6,7 @@
 //
 // In production this whole module is replaced by the scanner vendor's SDK,
 // which hands us an encrypted template instead of a geometry vector.
-import { extractFeatures, frameProblem, medianVector, spreadOf, FEATURE_MODEL } from '/shared/palm-features.js';
+import { extractFeatures, frameProblem, medianVector, spreadOf, tremorScore, FEATURE_MODEL } from '/shared/palm-features.js';
 
 const TARGET_FRAMES = 18;
 const MAX_SPREAD = 0.09;
@@ -22,6 +22,7 @@ const HINTS = {
   unsteady: ['Keep your hand steady', 'Starting the reading again.'],
   two_hands: ['Show one hand only', 'Keep your other hand out of view.'],
   mixed_hands: ['Use one hand', 'Keep the same hand in view until the reading finishes.'],
+  not_live: ['Use your real hand', 'Photos and screens can\'t be used. Hold your own hand up.'],
 };
 
 const CONNECTIONS = [
@@ -54,10 +55,14 @@ async function getLandmarker(modelUrl) {
 export class PalmScanner {
   /**
    * @param {{video: HTMLVideoElement, canvas: HTMLCanvasElement, viewport: HTMLElement,
-   *          modelUrl: string, onHint: Function, onProgress: Function}} opts
+   *          modelUrl: string, onHint: Function, onProgress: Function,
+   *          liveness?: {mode: 'off'|'observe'|'enforce', minTremor: number},
+   *          onLiveness?: Function}} opts
    */
   constructor(opts) {
     Object.assign(this, opts);
+    this.liveness ||= { mode: 'off', minTremor: 0 };
+    this.imageFrames = [];
     this.facing = 'environment';
     this.frames = [];
     this.missing = 0;
@@ -110,6 +115,7 @@ export class PalmScanner {
 
   reset() {
     this.frames = [];
+    this.imageFrames = [];
     this.hands = [];
     this.onProgress(0);
     this.viewport.classList.remove('locked');
@@ -147,6 +153,7 @@ export class PalmScanner {
     const vector = extractFeatures(world);
     if (!vector) return;
     this.frames.push(vector);
+    this.imageFrames.push(image);
     if (side && side.score >= 0.6) (this.hands ||= []).push(side.categoryName);
     this.viewport.classList.add('locked');
     this.onHint(...HINTS.reading);
@@ -168,7 +175,20 @@ export class PalmScanner {
         this.onHint(...HINTS.mixed_hands);
         return;
       }
-      const probe = { model: FEATURE_MODEL, vector: median, hand, quality: { frames: this.frames.length, spread } };
+      // Liveness: did the fingers tremble on their own, like a real hand?
+      let liveness;
+      if (this.liveness.mode !== 'off') {
+        const tremor = tremorScore(this.imageFrames, this.video.videoWidth / this.video.videoHeight || 1);
+        const passed = tremor != null && tremor >= this.liveness.minTremor;
+        liveness = { check: 'tremor', tremor, passed };
+        this.onLiveness?.(liveness);
+        if (!passed && this.liveness.mode === 'enforce') {
+          this.reset();
+          this.onHint(...HINTS.not_live);
+          return;
+        }
+      }
+      const probe = { model: FEATURE_MODEL, vector: median, hand, quality: { frames: this.frames.length, spread }, liveness };
       const snapshot = this.snapshot();
       this.pause();
       this.resolveCapture?.({ probe, snapshot });

@@ -329,7 +329,7 @@ async function runSetupScan() {
         const u = await api('/enrollments', { method: 'POST', body, key: state.key });
         return { ok: true, value: u, title: 'PalmPay is on', message: 'Pay with the same hand you just scanned.' };
       } catch (err) {
-        return { ok: false, retry: err.code === 'invalid_request', title: 'Could not finish setup', message: err.message };
+        return { ok: false, retry: err.code === 'invalid_request', title: err.details?.reason === 'not_live' ? 'Use your real hand' : 'Could not finish setup', message: err.message };
       }
     },
   });

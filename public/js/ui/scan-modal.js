@@ -66,6 +66,18 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
   const retryBtn = $('[data-act="retry"]');
   const debugEl = $('.debug');
 
+  // Debug line: match distance and tremor score, so thresholds can be tuned on the spot.
+  let matchLine = '';
+  let liveLine = '';
+  const showDebug = () => {
+    if (!config.exposeMatchDebug) return;
+    const text = [matchLine, liveLine].filter(Boolean).join(' · ');
+    debugEl.hidden = !text;
+    debugEl.textContent = text;
+  };
+  const livenessText = (l) =>
+    `Tremor ${l.tremor ?? 'n/a'} (min ${config.liveness.minTremor}, ${l.passed ? 'live' : 'looks flat'}${config.liveness.mode === 'observe' ? ', not enforced' : ''})`;
+
   const setHint = (strong, span = '') => { hint.innerHTML = `<strong>${esc(strong)}</strong><span>${esc(span)}</span>`; };
   const setProgress = (p) => {
     ringFill.setAttribute('stroke-dashoffset', (RING_C * (1 - Math.min(1, p))).toFixed(1));
@@ -75,6 +87,7 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
   const scanner = new PalmScanner({
     video: $('video'), canvas: $('canvas'), viewport: $('.viewport'),
     modelUrl: config.biometric.handModelUrl, onHint: setHint, onProgress: setProgress,
+    liveness: config.liveness, onLiveness: (l) => { liveLine = livenessText(l); showDebug(); },
   });
 
   let finish;
@@ -111,9 +124,9 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     }
     el.classList.remove('verifying');
     busy = false;
-    if (res.debug && config.exposeMatchDebug) {
-      debugEl.hidden = false;
-      debugEl.textContent = `Match: ${res.debug.status}, distance ${res.debug.distance ?? 'n/a'} (threshold ${res.debug.threshold ?? 'n/a'})`;
+    if (res.debug) {
+      matchLine = `Match: ${res.debug.status}, distance ${res.debug.distance ?? 'n/a'} (threshold ${res.debug.threshold ?? 'n/a'})`;
+      showDebug();
     }
     showResult(res.ok);
     setHint(res.title || (res.ok ? 'Done' : 'Not recognised'), res.message || '');

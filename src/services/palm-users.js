@@ -61,7 +61,11 @@ export function createPalmUserService({ uow, matcher, banks, config }) {
       let templateRef = null;
       if (!demo) {
         const check = matcher.validateProbe(palm);
-        if (!check.ok) throw invalid('The palm scan was not usable. Scan again with the whole hand inside the outline.', { reason: check.reason });
+        if (!check.ok) {
+          throw invalid(check.reason === 'not_live'
+            ? 'This did not look like a live hand. Scan your own hand, not a photo or a screen.'
+            : 'The palm scan was not usable. Scan again with the whole hand inside the outline.', { reason: check.reason });
+        }
         templateRef = (await matcher.enroll(palm)).templateRef;
       }
       const funding = await checkAccount(bankId, bankCustomerRef, accountRef);

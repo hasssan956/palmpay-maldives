@@ -46,6 +46,7 @@ export function createApp(c) {
       currency: config.currency, demoMode: config.demoMode, allowReset: config.allowReset, exposeMatchDebug: config.exposeMatchDebug,
       defaultPalmLimit: config.defaultPalmLimit, maxPalmLimit: config.maxPalmLimit, maxScanAttempts: config.maxScanAttempts,
       biometric: { provider: config.biometricProvider, model: c.matcher.model, handModelUrl: config.handModelUrl, threshold: config.matchThreshold },
+      liveness: { mode: config.livenessMode, minTremor: config.minTremor },
       demoKeys,
     });
   });
