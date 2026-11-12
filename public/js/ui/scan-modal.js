@@ -69,9 +69,10 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
   // Debug line: match distance and tremor score, so thresholds can be tuned on the spot.
   let matchLine = '';
   let liveLine = '';
+  let errorLine = '';
   const showDebug = () => {
     if (!config.exposeMatchDebug) return;
-    const text = [matchLine, liveLine].filter(Boolean).join(' · ');
+    const text = [matchLine, liveLine, errorLine].filter(Boolean).join(' · ');
     debugEl.hidden = !text;
     debugEl.textContent = text;
   };
@@ -95,6 +96,10 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     video: $('video'), canvas: $('canvas'), viewport: $('.viewport'),
     modelUrl: config.biometric.handModelUrl, onHint: setHint, onProgress: setProgress,
     liveness: config.liveness, onLiveness: (l) => { liveLine = livenessText(l); showDebug(); },
+    onError: (err) => {
+      console.error('Scanner:', err);
+      if (!errorLine) { errorLine = `Scanner error: ${String(err?.message || err).slice(0, 120)}`; showDebug(); }
+    },
   });
 
   let finish;

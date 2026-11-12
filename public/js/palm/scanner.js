@@ -71,15 +71,16 @@ async function getObjectDetector(modelUrl) {
     detectorPromise = (async () => {
       const { FilesetResolver, ObjectDetector } = await import('/vendor/mediapipe/vision_bundle.mjs');
       const fileset = await FilesetResolver.forVisionTasks('/vendor/mediapipe/wasm');
-      const make = (delegate) =>
-        ObjectDetector.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: modelUrl, delegate },
-          runningMode: 'VIDEO',
-          scoreThreshold: 0.3,
-          maxResults: 5,
-          categoryAllowlist: DEVICE_CATEGORIES,
-        });
-      try { return await make('GPU'); } catch { return make('CPU'); }
+      // CPU on purpose: the hand reader already uses the GPU, and a second GPU
+      // model starting mid-scan can break it on phones. It runs on every 4th
+      // frame only, so the CPU cost is small.
+      return ObjectDetector.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: modelUrl, delegate: 'CPU' },
+        runningMode: 'VIDEO',
+        scoreThreshold: 0.3,
+        maxResults: 5,
+        categoryAllowlist: DEVICE_CATEGORIES,
+      });
     })();
     detectorPromise.catch(() => { detectorPromise = undefined; });
   }
@@ -102,6 +103,7 @@ export class PalmScanner {
     this.glareSamples = [];
     this.deviceSeen = []; // kept across resets on purpose
     this.tick = 0;
+    this.errors = 0;
     this.facing = 'environment';
     this.frames = [];
     this.missing = 0;
@@ -173,10 +175,22 @@ export class PalmScanner {
   loop() {
     if (!this.running) return;
     const v = this.video;
-    if (v.readyState >= 2 && v.currentTime !== this.lastTime) {
-      this.lastTime = v.currentTime;
-      const result = this.landmarker.detectForVideo(v, performance.now());
-      this.handleFrame(result);
+    try {
+      if (v.readyState >= 2 && v.currentTime !== this.lastTime) {
+        this.lastTime = v.currentTime;
+        const result = this.landmarker.detectForVideo(v, performance.now());
+        this.handleFrame(result);
+        this.errors = 0;
+      }
+    } catch (err) {
+      // One bad frame must never freeze the scanner: report it and carry on.
+      this.errors = (this.errors || 0) + 1;
+      this.onError?.(err);
+      if (this.errors >= 60) {
+        this.pause();
+        this.onHint('Scanner stopped', 'Close the scanner and try again.');
+        return;
+      }
     }
     this.raf = requestAnimationFrame(() => this.loop());
   }
@@ -202,7 +216,9 @@ export class PalmScanner {
     if (!vector) return;
     this.frames.push(vector);
     this.imageFrames.push(image);
-    if (this.checks.includes('glare') && this.frames.length % GLARE_EVERY === 1) this.sampleGlare(image);
+    if (this.checks.includes('glare') && this.frames.length % GLARE_EVERY === 1) {
+      try { this.sampleGlare(image); } catch (err) { this.onError?.(err); }
+    }
     if (side && side.score >= 0.6) (this.hands ||= []).push(side.categoryName);
     this.viewport.classList.add('locked');
     this.onHint(...HINTS.reading);
@@ -273,7 +289,9 @@ export class PalmScanner {
       const now = performance.now();
       this.deviceSeen.push({ t: now, ...deviceAroundHand(handBox(image), devices) });
       this.deviceSeen = this.deviceSeen.filter((d) => now - d.t <= DEVICE_WINDOW_MS);
-    } catch { /* a failed detection just means no sample this frame */ }
+    } catch (err) {
+      this.onError?.(err); // no sample this frame; the scan carries on
+    }
   }
 
   sampleGlare(image) {
