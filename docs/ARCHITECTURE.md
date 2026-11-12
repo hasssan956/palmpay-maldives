@@ -76,15 +76,23 @@ All calls send `Authorization: Bearer <key>`.
 
 Hand geometry from a phone camera is **demo grade**. It is good for showing the experience to banks and investors with a few enrolled people. It is **not** secure enough for real money: similar hands can be confused, and its liveness check is basic. The scan screen shows the match distance so `MATCH_THRESHOLD` can be tuned with real people.
 
-**Tremor liveness check.** A real hand never holds perfectly still: the fingers tremble and drift slightly, each on its own. A photo or a phone screen showing a hand moves as one flat sheet. `tremorScore` in `shared/palm-features.js` aligns every frame to a reference shape with a best-fit affine transform (which absorbs any moving, tilting or zooming of a flat picture) and measures the finger motion left over, in palm widths. The scanner sends the score with the probe; the matcher has the final say.
+**Liveness checks.** Three cheap checks run on the same camera frames, all in `shared/palm-features.js`:
+
+| Check | What it looks for | Setting |
+|---|---|---|
+| Tremor | A real hand never holds perfectly still: the fingers tremble and drift slightly, each on its own. A photo or a screen moves as one flat sheet. `tremorScore` removes any flat (affine) motion and measures the finger motion left over, in palm widths. | `MIN_TREMOR` |
+| Device frame | MediaPipe's object detector (EfficientDet-Lite0, about 4 MB, loaded in the background) looks for a phone, tablet, laptop or monitor. It only counts when the hand sits inside the device and fills a fair part of it, so a phone in the customer's other hand or a till screen behind them doesn't block anyone. A device seen in the last 5 seconds counts, so showing it from afar and then moving close doesn't help. | `MAX_DEVICE_SCORE` |
+| Glare | Skin scatters light softly; glossy photo paper and glass screens throw back bright, nearly white highlights. `glareShare` measures how much of the palm is that kind of glare. | `MAX_GLARE` |
+
+The scanner sends the scores with the probe; the matcher applies the same rule (`evaluateLiveness`) with the server's own thresholds and has the final say. A missing score counts as a fail, so a scan can't skip a check.
 
 | `LIVENESS_MODE` | What happens |
 |---|---|
-| `off` | No tremor check |
-| `observe` (default) | Score is measured and shown on the scan screen (`Tremor 0.0xx`), nothing is blocked |
-| `enforce` | Scans under `MIN_TREMOR` are refused, in the scanner and again on the server (`not_live`) |
+| `off` | No liveness checks |
+| `observe` (default) | Scores are measured and shown on the scan screen, nothing is blocked |
+| `enforce` | A scan failing any check in `LIVENESS_CHECKS` is refused, in the scanner and again on the server (`not_live`) |
 
-Tune it before enforcing: scan real hands and a photo of a hand on another phone, read the scores, set `MIN_TREMOR` between them, then switch to `enforce`. It stops still and hand-held photos and screens. It does not stop a video of a real hand, and the camera's own landmark noise adds to the score. Bank-grade liveness (tested to ISO 30107-3) comes with the palm-vein vendor SDK. Keep `DEMO_MODE` on so a demo never stalls on lighting.
+Tune before enforcing: scan real hands, then a photo of a hand on another phone and on paper, read the scores, and set each threshold between them. Strong lighting on a sweaty palm can raise glare; a hand held right in front of a big monitor can raise the device score. What still gets through: a tablet held so close its edges are out of view, a matt printed hand cut out along its outline, and a good video on a matt screen. Bank-grade liveness (tested to ISO 30107-3) comes with the palm-vein vendor SDK. Keep `DEMO_MODE` on so a demo never stalls on lighting.
 
 Production needs dedicated scanners at counters and a vendor SDK, ideally palm vein (it reads under the skin and is hard to fake). Vendors selling SDKs or APIs include Tencent PalmAI, Fujitsu PalmSecure, Keyo and Redrock Biometrics. Enrolment would also move to a vendor-approved flow. Some vendors allow enrolling with a phone camera; others need a scanner at a branch or shop.
 

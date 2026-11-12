@@ -52,7 +52,8 @@ export async function buildContainer(overrides = {}) {
   switch (config.biometricProvider) {
     case 'hand-geometry':
       matcher = createHandGeometryMatcher({ threshold: config.matchThreshold, margin: config.matchMargin, duplicateThreshold: config.duplicateThreshold,
-        liveness: { mode: config.livenessMode, minTremor: config.minTremor } });
+        liveness: { mode: config.livenessMode, checks: config.livenessChecks, minTremor: config.minTremor,
+          maxDeviceScore: config.maxDeviceScore, maxGlare: config.maxGlare } });
       break;
     default:
       throw new Error(`BIOMETRIC_PROVIDER=${config.biometricProvider} has no adapter yet.`);

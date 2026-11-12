@@ -169,5 +169,96 @@ function alignAffine(src, dst) {
   });
 }
 
+// --- Liveness: device frame -------------------------------------------------
+//
+// A photo or video of a hand is usually shown on a phone, tablet or laptop.
+// An object detector (COCO classes) looks for those around the hand. To avoid
+// blocking a real customer with a phone in their other hand, or a till screen
+// behind them, a device only counts when the hand sits INSIDE it and fills a
+// fair part of it.
+
+export const DEVICE_CATEGORIES = ['cell phone', 'laptop', 'tv']; // "tv" covers monitors
+
+/** Bounding box of image landmarks, normalised 0..1. */
+export function handBox(points) {
+  const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+
+/**
+ * @param {{x,y,w,h}} hand normalised hand box
+ * @param {{x,y,w,h,score,label}[]} devices normalised device boxes
+ * @returns {{score:number,label:string|null}} the most confident device that frames the hand
+ */
+export function deviceAroundHand(hand, devices) {
+  let best = { score: 0, label: null };
+  const handArea = hand.w * hand.h;
+  if (!(handArea > 0)) return best;
+  for (const d of devices || []) {
+    const ix = Math.max(0, Math.min(hand.x + hand.w, d.x + d.w) - Math.max(hand.x, d.x));
+    const iy = Math.max(0, Math.min(hand.y + hand.h, d.y + d.h) - Math.max(hand.y, d.y));
+    const inside = (ix * iy) / handArea; // how much of the hand is within the device
+    const fills = handArea / (d.w * d.h || 1); // how much of the device the hand fills
+    if (inside >= 0.6 && fills >= 0.15 && d.score > best.score) best = { score: round4(d.score), label: d.label };
+  }
+  return best;
+}
+
+// --- Liveness: glare ---------------------------------------------------------
+//
+// Skin scatters light softly. Glossy photo paper and glass screens throw back
+// bright, nearly white highlights. We measure the share of the palm (not the
+// fingers, which have background between them) that is near-white glare.
+
+export const PALM_OUTLINE = [0, 1, 2, 5, 9, 13, 17];
+
+/**
+ * @param {Uint8ClampedArray} rgba image pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {[number,number][]} polygon palm outline in pixel coordinates of this image
+ * @returns {number|null} share of palm pixels that are glare (0..1)
+ */
+export function glareShare(rgba, width, height, polygon) {
+  let palm = 0, glare = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!insidePolygon(x + 0.5, y + 0.5, polygon)) continue;
+      const i = (y * width + x) * 4;
+      const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      palm++;
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (luma >= 235 && Math.max(r, g, b) - Math.min(r, g, b) <= 40) glare++;
+    }
+  }
+  return palm < 50 ? null : round4(glare / palm);
+}
+
+function insidePolygon(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// --- Liveness: the rule, shared by scanner and server -----------------------
+
+/**
+ * @param {{tremor?:number|null, device?:{score:number}|null, glare?:number|null}} m measurements
+ * @param {{checks:string[], minTremor:number, maxDeviceScore:number, maxGlare:number}} s settings
+ * @returns {{passed:boolean, failed:string[]}} a missing measurement counts as a fail
+ */
+export function evaluateLiveness(m = {}, s) {
+  const failed = [];
+  const on = (c) => s.checks.includes(c);
+  if (on('tremor') && !(Number.isFinite(m.tremor) && m.tremor >= s.minTremor)) failed.push('tremor');
+  if (on('device') && !(Number.isFinite(m.device?.score) && m.device.score < s.maxDeviceScore)) failed.push('device');
+  if (on('glare') && !(Number.isFinite(m.glare) && m.glare <= s.maxGlare)) failed.push('glare');
+  return { passed: failed.length === 0, failed };
+}
+
 const mean = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
 const round4 = (x) => Math.round(x * 10000) / 10000;

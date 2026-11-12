@@ -106,7 +106,7 @@ export function createPaymentService({ uow, matcher, banks, config }) {
         if (!check.ok) {
           throw invalid(check.reason === 'not_live'
             ? 'This did not look like a live hand. Hold your own hand up to the camera, not a photo or a screen.'
-            : 'The palm scan was not usable. Hold your whole hand inside the outline and scan again.', { reason: check.reason });
+            : 'The palm scan was not usable. Hold your whole hand inside the outline and scan again.', { reason: check.reason, failed: check.failed });
         }
       }
 

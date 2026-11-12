@@ -4,12 +4,25 @@
 // npm), so there is no CDN dependency for the code. The ~8 MB model file is
 // fetched once from Google's model bucket unless HAND_MODEL_URL points elsewhere.
 //
+// Liveness checks run on the same frames (see shared/palm-features.js):
+//   tremor  - do the fingers move on their own, like a real hand?
+//   device  - is the hand framed by a phone, tablet, laptop or monitor? Uses
+//             MediaPipe's object detector (a ~4 MB model, loaded in the background)
+//   glare   - is the palm throwing back shiny, near-white reflection?
+//
 // In production this whole module is replaced by the scanner vendor's SDK,
 // which hands us an encrypted template instead of a geometry vector.
-import { extractFeatures, frameProblem, medianVector, spreadOf, tremorScore, FEATURE_MODEL } from '/shared/palm-features.js';
+import {
+  extractFeatures, frameProblem, medianVector, spreadOf, FEATURE_MODEL,
+  tremorScore, handBox, deviceAroundHand, glareShare, evaluateLiveness, DEVICE_CATEGORIES, PALM_OUTLINE,
+} from '/shared/palm-features.js';
 
 const TARGET_FRAMES = 18;
 const MAX_SPREAD = 0.09;
+const DEVICE_EVERY = 4; // run the object detector on every 4th frame with a hand in it
+const DEVICE_WINDOW_MS = 5000; // a device seen in the last 5 s counts, so showing it from afar then moving close doesn't help
+const GLARE_EVERY = 3; // measure glare on every 3rd frame of the reading
+const GLARE_SIZE = 96; // pixels, longest side of the palm crop
 
 const HINTS = {
   loading: ['Starting the scanner', 'Allow camera access if your browser asks.'],
@@ -52,17 +65,43 @@ async function getLandmarker(modelUrl) {
   return landmarkerPromise;
 }
 
+let detectorPromise;
+async function getObjectDetector(modelUrl) {
+  if (!detectorPromise) {
+    detectorPromise = (async () => {
+      const { FilesetResolver, ObjectDetector } = await import('/vendor/mediapipe/vision_bundle.mjs');
+      const fileset = await FilesetResolver.forVisionTasks('/vendor/mediapipe/wasm');
+      const make = (delegate) =>
+        ObjectDetector.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: modelUrl, delegate },
+          runningMode: 'VIDEO',
+          scoreThreshold: 0.3,
+          maxResults: 5,
+          categoryAllowlist: DEVICE_CATEGORIES,
+        });
+      try { return await make('GPU'); } catch { return make('CPU'); }
+    })();
+    detectorPromise.catch(() => { detectorPromise = undefined; });
+  }
+  return detectorPromise;
+}
+
 export class PalmScanner {
   /**
    * @param {{video: HTMLVideoElement, canvas: HTMLCanvasElement, viewport: HTMLElement,
    *          modelUrl: string, onHint: Function, onProgress: Function,
-   *          liveness?: {mode: 'off'|'observe'|'enforce', minTremor: number},
+   *          liveness?: {mode: 'off'|'observe'|'enforce', checks: string[], minTremor: number,
+   *                      maxDeviceScore: number, maxGlare: number, objectModelUrl: string},
    *          onLiveness?: Function}} opts
    */
   constructor(opts) {
     Object.assign(this, opts);
-    this.liveness ||= { mode: 'off', minTremor: 0 };
+    this.liveness ||= { mode: 'off', checks: [] };
+    this.checks = this.liveness.mode === 'off' ? [] : this.liveness.checks || [];
     this.imageFrames = [];
+    this.glareSamples = [];
+    this.deviceSeen = []; // kept across resets on purpose
+    this.tick = 0;
     this.facing = 'environment';
     this.frames = [];
     this.missing = 0;
@@ -81,6 +120,11 @@ export class PalmScanner {
       this.openCamera(),
     ]);
     this.landmarker = landmarker;
+    if (this.checks.includes('device')) {
+      // In the background: scanning starts without waiting. If it never loads,
+      // the device score is "n/a", which enforce mode treats as a fail.
+      getObjectDetector(this.liveness.objectModelUrl).then((d) => { this.detector = d; }, () => {});
+    }
     this.running = true;
     this.lastTime = -1;
     this.loop();
@@ -116,6 +160,7 @@ export class PalmScanner {
   reset() {
     this.frames = [];
     this.imageFrames = [];
+    this.glareSamples = [];
     this.hands = [];
     this.onProgress(0);
     this.viewport.classList.remove('locked');
@@ -142,6 +187,9 @@ export class PalmScanner {
     const side = result.handedness?.[0]?.[0];
     this.draw(image);
 
+    const handCount = result.landmarks?.length || 0;
+    if (handCount === 1 && this.checks.includes('device') && ++this.tick % DEVICE_EVERY === 0) this.sampleDevice(image);
+
     const problem = (result.landmarks?.length || 0) > 1 ? 'two_hands' : frameProblem(image);
     if (problem) {
       this.missing++;
@@ -154,6 +202,7 @@ export class PalmScanner {
     if (!vector) return;
     this.frames.push(vector);
     this.imageFrames.push(image);
+    if (this.checks.includes('glare') && this.frames.length % GLARE_EVERY === 1) this.sampleGlare(image);
     if (side && side.score >= 0.6) (this.hands ||= []).push(side.categoryName);
     this.viewport.classList.add('locked');
     this.onHint(...HINTS.reading);
@@ -175,14 +224,12 @@ export class PalmScanner {
         this.onHint(...HINTS.mixed_hands);
         return;
       }
-      // Liveness: did the fingers tremble on their own, like a real hand?
+      // Liveness: tremor, device frame and glare.
       let liveness;
-      if (this.liveness.mode !== 'off') {
-        const tremor = tremorScore(this.imageFrames, this.video.videoWidth / this.video.videoHeight || 1);
-        const passed = tremor != null && tremor >= this.liveness.minTremor;
-        liveness = { check: 'tremor', tremor, passed };
+      if (this.checks.length) {
+        liveness = this.measureLiveness();
         this.onLiveness?.(liveness);
-        if (!passed && this.liveness.mode === 'enforce') {
+        if (!liveness.passed && this.liveness.mode === 'enforce') {
           this.reset();
           this.onHint(...HINTS.not_live);
           return;
@@ -193,6 +240,59 @@ export class PalmScanner {
       this.pause();
       this.resolveCapture?.({ probe, snapshot });
     }
+  }
+
+  measureLiveness() {
+    const m = {};
+    if (this.checks.includes('tremor')) {
+      m.tremor = tremorScore(this.imageFrames, this.video.videoWidth / this.video.videoHeight || 1);
+    }
+    if (this.checks.includes('device')) {
+      const now = performance.now();
+      const recent = this.deviceSeen.filter((d) => now - d.t <= DEVICE_WINDOW_MS);
+      m.device = this.detector && recent.length
+        ? recent.reduce((best, d) => (d.score > best.score ? { score: d.score, label: d.label } : best), { score: 0, label: null })
+        : null;
+    }
+    if (this.checks.includes('glare')) {
+      m.glare = this.glareSamples.length ? medianVector(this.glareSamples.map((g) => [g]))[0] : null;
+    }
+    return { ...m, ...evaluateLiveness(m, { ...this.liveness, checks: this.checks }) };
+  }
+
+  sampleDevice(image) {
+    if (!this.detector) return;
+    const v = this.video;
+    try {
+      const res = this.detector.detectForVideo(v, performance.now());
+      const devices = (res.detections || []).filter((d) => d.boundingBox).map((d) => ({
+        x: d.boundingBox.originX / v.videoWidth, y: d.boundingBox.originY / v.videoHeight,
+        w: d.boundingBox.width / v.videoWidth, h: d.boundingBox.height / v.videoHeight,
+        score: d.categories?.[0]?.score || 0, label: d.categories?.[0]?.categoryName || null,
+      }));
+      const now = performance.now();
+      this.deviceSeen.push({ t: now, ...deviceAroundHand(handBox(image), devices) });
+      this.deviceSeen = this.deviceSeen.filter((d) => now - d.t <= DEVICE_WINDOW_MS);
+    } catch { /* a failed detection just means no sample this frame */ }
+  }
+
+  sampleGlare(image) {
+    const v = this.video;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    const palm = PALM_OUTLINE.map((i) => [image[i].x * vw, image[i].y * vh]);
+    const x0 = Math.max(0, Math.min(...palm.map((p) => p[0])));
+    const y0 = Math.max(0, Math.min(...palm.map((p) => p[1])));
+    const x1 = Math.min(vw, Math.max(...palm.map((p) => p[0])));
+    const y1 = Math.min(vh, Math.max(...palm.map((p) => p[1])));
+    if (!(x1 - x0 > 8 && y1 - y0 > 8)) return;
+    const k = GLARE_SIZE / Math.max(x1 - x0, y1 - y0);
+    const w = Math.max(1, Math.round((x1 - x0) * k)), h = Math.max(1, Math.round((y1 - y0) * k));
+    const c = (this.glareCanvas ||= document.createElement('canvas'));
+    c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(v, x0, y0, x1 - x0, y1 - y0, 0, 0, w, h);
+    const share = glareShare(g.getImageData(0, 0, w, h).data, w, h, palm.map(([x, y]) => [(x - x0) * k, (y - y0) * k]));
+    if (share != null) this.glareSamples.push(share);
   }
 
   draw(points) {

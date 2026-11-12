@@ -64,7 +64,7 @@ export function createPalmUserService({ uow, matcher, banks, config }) {
         if (!check.ok) {
           throw invalid(check.reason === 'not_live'
             ? 'This did not look like a live hand. Scan your own hand, not a photo or a screen.'
-            : 'The palm scan was not usable. Scan again with the whole hand inside the outline.', { reason: check.reason });
+            : 'The palm scan was not usable. Scan again with the whole hand inside the outline.', { reason: check.reason, failed: check.failed });
         }
         templateRef = (await matcher.enroll(palm)).templateRef;
       }
