@@ -81,7 +81,7 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     const mark = (c) => (l.failed.includes(c) ? '✗' : '✓');
     const parts = [];
     if ('tremor' in l) parts.push(`Tremor ${l.tremor ?? 'n/a'} ${mark('tremor')} (min ${L.minTremor})`);
-    if ('device' in l) parts.push(`Device ${l.device ? `${l.device.score}${l.device.label ? ` ${l.device.label}` : ''}` : 'n/a'} ${mark('device')} (max ${L.maxDeviceScore})`);
+    if ('device' in l) parts.push(`Device ${l.device ? `${l.device.score} (${l.device.sides} sides)` : 'n/a'} ${mark('device')} (max ${L.maxDeviceScore})`);
     if ('glare' in l) parts.push(`Glare ${l.glare ?? 'n/a'} ${mark('glare')} (max ${L.maxGlare})`);
     return parts.join(' · ') + (L.mode === 'observe' ? ' · not enforced' : '');
   };

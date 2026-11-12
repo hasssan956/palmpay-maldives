@@ -50,9 +50,8 @@ export const config = Object.freeze({
   livenessChecks: (env.LIVENESS_CHECKS || 'tremor,device,glare').split(',').map((x) => x.trim())
     .filter((x) => ['tremor', 'device', 'glare'].includes(x)),
   minTremor: num(env.MIN_TREMOR, 0.005), // palm widths a live hand moves on its own
-  maxDeviceScore: num(env.MAX_DEVICE_SCORE, 0.5), // detector confidence that a phone/screen frames the hand
+  maxDeviceScore: num(env.MAX_DEVICE_SCORE, 0.6), // 0..1: how strongly straight edges box the hand in (a phone border)
   maxGlare: num(env.MAX_GLARE, 0.05), // share of the palm that is shiny near-white glare
-  objectModelUrl: env.OBJECT_MODEL_URL || 'https://storage.googleapis.com/mediapipe-tasks/object_detector/efficientdet_lite0_uint8.tflite',
   handModelUrl:
     env.HAND_MODEL_URL ||
     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',

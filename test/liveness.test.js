@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tremorScore, deviceAroundHand, handBox, glareShare, evaluateLiveness } from '../shared/palm-features.js';
+import { tremorScore, frameAroundHand, handBox, glareShare, evaluateLiveness } from '../shared/palm-features.js';
 import { makeHand, landmarksFor } from './helpers.js';
 import { createHandGeometryMatcher } from '../src/adapters/biometrics/hand-geometry-matcher.js';
 
@@ -59,21 +59,51 @@ test('tremor needs enough frames', () => {
   assert.equal(tremorScore(photoFrames(1).slice(0, 4)), null);
 });
 
-const SETTINGS = { checks: ['tremor', 'device', 'glare'], minTremor: 0.005, maxDeviceScore: 0.5, maxGlare: 0.05 };
-const LIVE = { tremor: 0.009, device: { score: 0, label: null }, glare: 0.01 };
+const SETTINGS = { checks: ['tremor', 'device', 'glare'], minTremor: 0.005, maxDeviceScore: 0.6, maxGlare: 0.05 };
+const LIVE = { tremor: 0.009, device: { score: 0.3, sides: 0 }, glare: 0.01 };
 const probe = (liveness) => ({ model: 'mp-handgeom-v1', vector: new Array(23).fill(1), hand: 'Right', quality: { frames: 18 }, liveness });
 const matcher = (mode, checks = SETTINGS.checks) =>
   createHandGeometryMatcher({ threshold: 0.075, margin: 0.8, duplicateThreshold: 0.075, liveness: { mode, ...SETTINGS, checks } });
 
-test('device check: a phone framing the hand counts, a phone elsewhere does not', () => {
-  const hand = { x: 0.35, y: 0.3, w: 0.3, h: 0.4 };
-  const phoneAround = { x: 0.3, y: 0.2, w: 0.42, h: 0.62, score: 0.8, label: 'cell phone' };
-  const phoneInOtherHand = { x: 0.75, y: 0.5, w: 0.15, h: 0.3, score: 0.9, label: 'cell phone' };
-  const bigScreenBehind = { x: 0, y: 0, w: 1, h: 1, score: 0.9, label: 'tv' }; // hand fills only 12% of it
-  assert.deepEqual(deviceAroundHand(hand, [phoneAround]), { score: 0.8, label: 'cell phone' });
-  assert.deepEqual(deviceAroundHand(hand, [phoneInOtherHand]), { score: 0, label: null });
-  assert.deepEqual(deviceAroundHand(hand, [bigScreenBehind]), { score: 0, label: null });
-  assert.equal(deviceAroundHand(handBox([{ x: 0.4, y: 0.4 }, { x: 0.6, y: 0.7 }]), [phoneAround]).score, 0.8);
+// Synthetic camera frames (grey levels) for the device-border check.
+function scene({ phone = false, tableEdge = false, seed = 5 }) {
+  const W = 192, H = 160, r = rng(seed);
+  const px = new Uint8Array(W * H);
+  // A busy room: random blotches of light and dark, like a patterned blanket.
+  const blobs = Array.from({ length: 40 }, () => ({ x: r() * W, y: r() * H, s: 4 + r() * 14, v: (r() - 0.5) * 160 }));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let v = 110 + (r() - 0.5) * 30;
+    for (const b of blobs) v += b.v * Math.exp(-((x - b.x) ** 2 + (y - b.y) ** 2) / (2 * b.s * b.s));
+    px[y * W + x] = Math.max(0, Math.min(255, v));
+  }
+  if (tableEdge) for (let y = 130; y < H; y++) for (let x = 0; x < W; x++) px[y * W + x] = 200;
+  if (phone) {
+    for (let y = 20; y < 150; y++) for (let x = 50; x < 140; x++) {
+      const bezel = x < 56 || x >= 134 || y < 28 || y >= 142;
+      px[y * W + x] = bezel ? 15 : 160 + (r() - 0.5) * 20;
+    }
+  }
+  // The hand.
+  for (let y = 40; y < 125; y++) for (let x = 70; x < 120; x++) {
+    if (((x - 95) / 25) ** 2 + ((y - 82) / 42) ** 2 <= 1) px[y * W + x] = 120;
+  }
+  return { gray: px, w: W, h: H, box: { x: 70, y: 40, w: 50, h: 85 } };
+}
+const frameScore = (opts) => { const s = scene(opts); return frameAroundHand(s.gray, s.w, s.h, s.box); };
+
+test('device check: a phone border around the hand scores high, a busy room does not', () => {
+  for (let seed = 1; seed <= 10; seed++) {
+    const phone = frameScore({ phone: true, seed });
+    assert.ok(phone.score >= 0.8 && phone.sides >= 3, `phone ${seed} ${JSON.stringify(phone)}`);
+  }
+  for (let seed = 1; seed <= 30; seed++) {
+    const room = frameScore({ seed });
+    assert.ok(room.score < 0.45, `room ${seed} ${JSON.stringify(room)}`);
+  }
+  // One straight edge (a table) under a real hand is not a device.
+  const table = frameScore({ tableEdge: true });
+  assert.ok(table.score < 0.45 && table.sides <= 1, `table ${JSON.stringify(table)}`);
+  assert.deepEqual(handBox([{ x: 0.4, y: 0.4 }, { x: 0.6, y: 0.7 }]), { x: 0.4, y: 0.4, w: 0.19999999999999996, h: 0.29999999999999993 });
 });
 
 test('glare check: shiny near-white patches on the palm are measured, skin tones are not', () => {
@@ -98,7 +128,7 @@ test('glare check: shiny near-white patches on the palm are measured, skin tones
 test('liveness rule: every enabled check must pass, and a missing reading fails', () => {
   assert.deepEqual(evaluateLiveness(LIVE, SETTINGS), { passed: true, failed: [] });
   assert.deepEqual(evaluateLiveness({ ...LIVE, tremor: 0.001 }, SETTINGS).failed, ['tremor']);
-  assert.deepEqual(evaluateLiveness({ ...LIVE, device: { score: 0.7, label: 'cell phone' } }, SETTINGS).failed, ['device']);
+  assert.deepEqual(evaluateLiveness({ ...LIVE, device: { score: 0.95, sides: 4 } }, SETTINGS).failed, ['device']);
   assert.deepEqual(evaluateLiveness({ ...LIVE, glare: 0.2 }, SETTINGS).failed, ['glare']);
   assert.deepEqual(evaluateLiveness({}, SETTINGS).failed, ['tremor', 'device', 'glare']);
   assert.deepEqual(evaluateLiveness({ tremor: 0.009 }, { ...SETTINGS, checks: ['tremor'] }).failed, []);
@@ -114,13 +144,13 @@ test('enforce mode rejects a scan that fails a check; observe mode lets it throu
 
 test('with LIVENESS_MODE=enforce, a scan of a phone screen cannot pay and a live hand can', async () => {
   const { testContainer, probeFor, MIB, CAFE, consent } = await import('./helpers.js');
-  const c = await testContainer({ livenessMode: 'enforce', livenessChecks: SETTINGS.checks, minTremor: 0.005, maxDeviceScore: 0.5, maxGlare: 0.05 });
+  const c = await testContainer({ livenessMode: 'enforce', livenessChecks: SETTINGS.checks, minTremor: 0.005, maxDeviceScore: 0.6, maxGlare: 0.05 });
   const hand = makeHand(11);
   const live = (p) => ({ ...p, liveness: LIVE });
   await c.palmUsers.enroll(MIB, { bankCustomerRef: 'mib_c_mariyam', name: 'Mariyam Shaheen', accountRef: 'mib_a_mariyam_cur', palm: live(probeFor(hand)), consent });
 
   const pi = await c.payments.createIntent(CAFE, { amount: 2500 });
-  const onPhone = { ...probeFor(hand), liveness: { ...LIVE, device: { score: 0.82, label: 'cell phone' }, glare: 0.12 } };
+  const onPhone = { ...probeFor(hand), liveness: { ...LIVE, device: { score: 0.95, sides: 4 }, glare: 0.12 } };
   await assert.rejects(c.payments.authorize(CAFE, pi.id, { palm: onPhone }),
     (e) => e.details?.reason === 'not_live' && e.details.failed.join() === 'device,glare');
 

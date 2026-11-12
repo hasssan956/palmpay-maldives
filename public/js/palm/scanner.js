@@ -6,20 +6,20 @@
 //
 // Liveness checks run on the same frames (see shared/palm-features.js):
 //   tremor  - do the fingers move on their own, like a real hand?
-//   device  - is the hand framed by a phone, tablet, laptop or monitor? Uses
-//             MediaPipe's object detector (a ~4 MB model, loaded in the background)
+//   device  - is the hand boxed in by straight edges, like a phone or screen border?
 //   glare   - is the palm throwing back shiny, near-white reflection?
 //
 // In production this whole module is replaced by the scanner vendor's SDK,
 // which hands us an encrypted template instead of a geometry vector.
 import {
   extractFeatures, frameProblem, medianVector, spreadOf, FEATURE_MODEL,
-  tremorScore, handBox, deviceAroundHand, glareShare, evaluateLiveness, DEVICE_CATEGORIES, PALM_OUTLINE,
+  tremorScore, handBox, frameAroundHand, glareShare, evaluateLiveness, PALM_OUTLINE,
 } from '/shared/palm-features.js';
 
 const TARGET_FRAMES = 18;
 const MAX_SPREAD = 0.09;
-const DEVICE_EVERY = 4; // run the object detector on every 4th frame with a hand in it
+const DEVICE_EVERY = 5; // look for a device border on every 5th frame with a hand in it
+const DEVICE_SIZE = 192; // pixels, longest side of the frame the border check works on
 const DEVICE_WINDOW_MS = 5000; // a device seen in the last 5 s counts, so showing it from afar then moving close doesn't help
 const GLARE_EVERY = 3; // measure glare on every 3rd frame of the reading
 const GLARE_SIZE = 96; // pixels, longest side of the palm crop
@@ -65,34 +65,12 @@ async function getLandmarker(modelUrl) {
   return landmarkerPromise;
 }
 
-let detectorPromise;
-async function getObjectDetector(modelUrl) {
-  if (!detectorPromise) {
-    detectorPromise = (async () => {
-      const { FilesetResolver, ObjectDetector } = await import('/vendor/mediapipe/vision_bundle.mjs');
-      const fileset = await FilesetResolver.forVisionTasks('/vendor/mediapipe/wasm');
-      // CPU on purpose: the hand reader already uses the GPU, and a second GPU
-      // model starting mid-scan can break it on phones. It runs on every 4th
-      // frame only, so the CPU cost is small.
-      return ObjectDetector.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: modelUrl, delegate: 'CPU' },
-        runningMode: 'VIDEO',
-        scoreThreshold: 0.3,
-        maxResults: 5,
-        categoryAllowlist: DEVICE_CATEGORIES,
-      });
-    })();
-    detectorPromise.catch(() => { detectorPromise = undefined; });
-  }
-  return detectorPromise;
-}
-
 export class PalmScanner {
   /**
    * @param {{video: HTMLVideoElement, canvas: HTMLCanvasElement, viewport: HTMLElement,
    *          modelUrl: string, onHint: Function, onProgress: Function,
    *          liveness?: {mode: 'off'|'observe'|'enforce', checks: string[], minTremor: number,
-   *                      maxDeviceScore: number, maxGlare: number, objectModelUrl: string},
+   *                      maxDeviceScore: number, maxGlare: number},
    *          onLiveness?: Function}} opts
    */
   constructor(opts) {
@@ -122,11 +100,6 @@ export class PalmScanner {
       this.openCamera(),
     ]);
     this.landmarker = landmarker;
-    if (this.checks.includes('device')) {
-      // In the background: scanning starts without waiting. If it never loads,
-      // the device score is "n/a", which enforce mode treats as a fail.
-      getObjectDetector(this.liveness.objectModelUrl).then((d) => { this.detector = d; }, () => {});
-    }
     this.running = true;
     this.lastTime = -1;
     this.loop();
@@ -266,8 +239,8 @@ export class PalmScanner {
     if (this.checks.includes('device')) {
       const now = performance.now();
       const recent = this.deviceSeen.filter((d) => now - d.t <= DEVICE_WINDOW_MS);
-      m.device = this.detector && recent.length
-        ? recent.reduce((best, d) => (d.score > best.score ? { score: d.score, label: d.label } : best), { score: 0, label: null })
+      m.device = recent.length
+        ? recent.reduce((best, d) => (d.score > best.score ? { score: d.score, sides: d.sides } : best), { score: 0, sides: 0 })
         : null;
     }
     if (this.checks.includes('glare')) {
@@ -277,17 +250,22 @@ export class PalmScanner {
   }
 
   sampleDevice(image) {
-    if (!this.detector) return;
     const v = this.video;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return;
     try {
-      const res = this.detector.detectForVideo(v, performance.now());
-      const devices = (res.detections || []).filter((d) => d.boundingBox).map((d) => ({
-        x: d.boundingBox.originX / v.videoWidth, y: d.boundingBox.originY / v.videoHeight,
-        w: d.boundingBox.width / v.videoWidth, h: d.boundingBox.height / v.videoHeight,
-        score: d.categories?.[0]?.score || 0, label: d.categories?.[0]?.categoryName || null,
-      }));
+      const k = DEVICE_SIZE / Math.max(vw, vh);
+      const w = Math.round(vw * k), h = Math.round(vh * k);
+      const c = (this.deviceCanvas ||= document.createElement('canvas'));
+      c.width = w; c.height = h;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(v, 0, 0, w, h);
+      const px = g.getImageData(0, 0, w, h).data;
+      const gray = new Uint8Array(w * h);
+      for (let i = 0; i < gray.length; i++) gray[i] = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) >> 8;
+      const b = handBox(image);
       const now = performance.now();
-      this.deviceSeen.push({ t: now, ...deviceAroundHand(handBox(image), devices) });
+      this.deviceSeen.push({ t: now, ...frameAroundHand(gray, w, h, { x: b.x * w, y: b.y * h, w: b.w * w, h: b.h * h }) });
       this.deviceSeen = this.deviceSeen.filter((d) => now - d.t <= DEVICE_WINDOW_MS);
     } catch (err) {
       this.onError?.(err); // no sample this frame; the scan carries on

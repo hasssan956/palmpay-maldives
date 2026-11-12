@@ -171,13 +171,20 @@ function alignAffine(src, dst) {
 
 // --- Liveness: device frame -------------------------------------------------
 //
-// A photo or video of a hand is usually shown on a phone, tablet or laptop.
-// An object detector (COCO classes) looks for those around the hand. To avoid
-// blocking a real customer with a phone in their other hand, or a till screen
-// behind them, a device only counts when the hand sits INSIDE it and fills a
-// fair part of it.
+// A photo or video of a hand is shown on a phone, tablet or laptop, and the
+// device's border shows up as straight edges boxing the hand in. A real hand
+// in a room almost never has straight edges on three or four sides of it.
+//
+// For each side of the hand we cast rays outwards, collect the strong edges
+// each ray crosses (with the right orientation: up-and-down edges for the
+// left and right sides, across edges for top and bottom), and look for one
+// straight line that most rays cross (RANSAC). A side "has a border" when
+// most of its rays agree on such a line. The score, 0..1, is the third-best
+// side: a phone around the hand scores high, an open room low.
+// Each side's score also needs the line to be one continuous edge, like a
+// device border, not a few unrelated edges in a busy pattern that happen to line up.
 
-export const DEVICE_CATEGORIES = ['cell phone', 'laptop', 'tv']; // "tv" covers monitors
+const FRAME_RAYS = 20;
 
 /** Bounding box of image landmarks, normalised 0..1. */
 export function handBox(points) {
@@ -187,22 +194,102 @@ export function handBox(points) {
 }
 
 /**
- * @param {{x,y,w,h}} hand normalised hand box
- * @param {{x,y,w,h,score,label}[]} devices normalised device boxes
- * @returns {{score:number,label:string|null}} the most confident device that frames the hand
+ * @param {ArrayLike<number>} gray luminance, row by row (a small frame, ~200 px)
+ * @param {number} w
+ * @param {number} h
+ * @param {{x,y,w,h}} box hand box in pixels of this frame
+ * @param {object} [opts] tuning knobs (rays, maxHits, tolFactor, onFactor); defaults are the tuned values
+ * @returns {{score:number, sides:number}} sides = how many sides have a straight border
  */
-export function deviceAroundHand(hand, devices) {
-  let best = { score: 0, label: null };
-  const handArea = hand.w * hand.h;
-  if (!(handArea > 0)) return best;
-  for (const d of devices || []) {
-    const ix = Math.max(0, Math.min(hand.x + hand.w, d.x + d.w) - Math.max(hand.x, d.x));
-    const iy = Math.max(0, Math.min(hand.y + hand.h, d.y + d.h) - Math.max(hand.y, d.y));
-    const inside = (ix * iy) / handArea; // how much of the hand is within the device
-    const fills = handArea / (d.w * d.h || 1); // how much of the device the hand fills
-    if (inside >= 0.6 && fills >= 0.15 && d.score > best.score) best = { score: round4(d.score), label: d.label };
+export function frameAroundHand(gray, w, h, box, opts = {}) {
+  // Tuned on real phone-photo and real-hand frames plus generated cluttered rooms.
+  const { rays: RAYS = FRAME_RAYS, maxHits = 8, tolFactor = 0.008, onFactor = 1 } = opts;
+  const gx = new Float32Array(w * h), gy = new Float32Array(w * h), mag = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const a = gray[i - w - 1], b = gray[i - w], c = gray[i - w + 1];
+      const d = gray[i - 1], f = gray[i + 1];
+      const g = gray[i + w - 1], k = gray[i + w], l = gray[i + w + 1];
+      gx[i] = c + 2 * f + l - a - 2 * d - g;
+      gy[i] = g + 2 * k + l - a - 2 * b - c;
+      mag[i] = Math.hypot(gx[i], gy[i]);
+    }
   }
-  return best;
+  // Strong edge: in the top 15% of the frame, and clearly above flat noise.
+  const sorted = Float32Array.from(mag).sort();
+  const threshold = Math.max(60, sorted[Math.floor(sorted.length * 0.85)]);
+  const margin = Math.max(2, Math.round(Math.max(w, h) * 0.02));
+
+  const sides = [
+    { along: 'y', from: box.y, to: box.y + box.h, start: box.x - margin, step: -1, vertical: true },
+    { along: 'y', from: box.y, to: box.y + box.h, start: box.x + box.w + margin, step: 1, vertical: true },
+    { along: 'x', from: box.x, to: box.x + box.w, start: box.y - margin, step: -1, vertical: false },
+    { along: 'x', from: box.x, to: box.x + box.w, start: box.y + box.h + margin, step: 1, vertical: false },
+  ];
+
+  const scores = sides.map((side) => {
+    // Edge positions met by each ray. u = position along the side, v = distance outwards.
+    const rays = [];
+    for (let r = 0; r < RAYS; r++) {
+      const u = Math.round(side.from + ((r + 0.5) / RAYS) * (side.to - side.from));
+      const hits = [];
+      const limit = side.vertical ? w : h;
+      for (let v = Math.round(side.start); v >= 1 && v < limit - 1; v += side.step) {
+        const x = side.vertical ? v : u, y = side.vertical ? u : v;
+        if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) break;
+        const i = y * w + x;
+        if (mag[i] < threshold) continue;
+        const across = side.vertical ? Math.abs(gx[i]) : Math.abs(gy[i]);
+        const along = side.vertical ? Math.abs(gy[i]) : Math.abs(gx[i]);
+        if (across < along) continue; // edge runs the wrong way
+        const prev = mag[side.vertical ? i - side.step : i - side.step * w];
+        const next = mag[side.vertical ? i + side.step : i + side.step * w];
+        if (mag[i] >= prev && mag[i] >= next) hits.push(v); // local peak only
+        if (hits.length >= maxHits) break;
+      }
+      rays.push({ u, hits });
+    }
+    // RANSAC: a line v = a*u + b through edges on two rays; count rays that agree.
+    const tol = Math.max(1.5, Math.max(w, h) * tolFactor);
+    let best = 0, bestLine = null;
+    for (let r1 = 0; r1 < rays.length; r1++) {
+      for (let r2 = r1 + 2; r2 < rays.length; r2++) {
+        for (const v1 of rays[r1].hits) {
+          for (const v2 of rays[r2].hits) {
+            const a = (v2 - v1) / (rays[r2].u - rays[r1].u);
+            if (Math.abs(a) > 0.35) continue; // more than ~20 degrees off the side
+            const b = v1 - a * rays[r1].u;
+            let n = 0;
+            for (const ray of rays) {
+              const v = a * ray.u + b;
+              if (ray.hits.some((hv) => Math.abs(hv - v) <= tol)) n++;
+            }
+            if (n > best) { best = n; bestLine = { a, b }; }
+          }
+        }
+      }
+    }
+    if (!bestLine) return 0;
+    // Continuity: walk the line pixel by pixel; how much of it is a real edge?
+    let on = 0, total = 0;
+    for (let u = Math.round(side.from); u <= Math.round(side.to); u++) {
+      const v = Math.round(bestLine.a * u + bestLine.b);
+      const x = side.vertical ? v : u, y = side.vertical ? u : v;
+      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
+      total++;
+      for (let dv = -1; dv <= 1; dv++) {
+        const i = side.vertical ? y * w + x + dv : (y + dv) * w + x;
+        if (mag[i] >= threshold * onFactor) { on++; break; }
+      }
+    }
+    return (best / RAYS) * (total ? on / total : 0);
+  });
+
+  // Score = the third-strongest side, so it takes a border on at least three
+  // sides to score high. Stripes (blinds, curtains, tiles) only line up one way.
+  const ranked = [...scores].sort((p, q) => q - p);
+  return { score: round4(ranked[2]), sides: scores.filter((x) => x >= 0.6).length };
 }
 
 // --- Liveness: glare ---------------------------------------------------------
