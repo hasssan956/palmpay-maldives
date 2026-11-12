@@ -35,7 +35,6 @@ const HINTS = {
   unsteady: ['Keep your hand steady', 'Starting the reading again.'],
   two_hands: ['Show one hand only', 'Keep your other hand out of view.'],
   mixed_hands: ['Use one hand', 'Keep the same hand in view until the reading finishes.'],
-  not_live: ['Use your real hand', 'Photos and screens can\'t be used. Hold your own hand up.'],
 };
 
 const CONNECTIONS = [
@@ -233,8 +232,9 @@ export class PalmScanner {
         liveness = this.measureLiveness();
         this.onLiveness?.(liveness);
         if (!liveness.passed && this.liveness.mode === 'enforce') {
-          this.reset();
-          this.onHint(...HINTS.not_live);
+          // Stop and say so, instead of quietly scanning again.
+          this.pause();
+          this.resolveCapture?.({ rejected: 'not_live', liveness });
           return;
         }
       }
@@ -348,6 +348,7 @@ export class PalmScanner {
 
   resume() {
     this.reset();
+    this.deviceSeen = []; // a fresh try after a refusal starts with a clean slate
     if (!this.landmarker) return;
     this.running = true;
     this.loop();

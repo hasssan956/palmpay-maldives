@@ -156,6 +156,12 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     retryBtn.hidden = true;
     setProgress(0);
     const captured = await scanner.capture();
+    if (captured.rejected === 'not_live') {
+      showResult(false);
+      setHint('Use your real hand', 'Photos and screens can\'t be used to pay. Hold your own hand up to the camera.');
+      retryBtn.hidden = false;
+      return;
+    }
     await handle(captured);
   }
 
