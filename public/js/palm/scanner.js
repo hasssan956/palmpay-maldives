@@ -89,6 +89,7 @@ export class PalmScanner {
   }
 
   async start() {
+    this.stopped = false;
     this.onHint(...HINTS.loading);
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new ScanError('no_camera', 'This browser cannot open the camera. Use Chrome or Safari over https.');
@@ -100,6 +101,7 @@ export class PalmScanner {
       this.openCamera(),
     ]);
     this.landmarker = landmarker;
+    if (this.stopped) { this.stopCamera(); return; } // closed while starting
     this.running = true;
     this.lastTime = -1;
     this.loop();
@@ -107,16 +109,28 @@ export class PalmScanner {
 
   async openCamera() {
     this.stopCamera();
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: { ideal: this.facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      });
-    } catch (err) {
-      const denied = err.name === 'NotAllowedError' || err.name === 'SecurityError';
-      throw new ScanError(denied ? 'camera_denied' : 'no_camera',
-        denied ? 'Camera access is blocked. Allow it in the browser settings, then try again.' : 'No camera was found on this device.');
+    // Phones can take a moment to release the camera from the last scan, and
+    // some refuse the preferred size: retry, asking for less each time.
+    const asks = [
+      { facingMode: { ideal: this.facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      { facingMode: { ideal: this.facing } },
+      true,
+    ];
+    let stream, lastErr;
+    for (const video of asks) {
+      if (this.stopped) return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err.name === 'NotAllowedError' || err.name === 'SecurityError') break;
+        await new Promise((r) => setTimeout(r, 700));
+      }
     }
+    if (!stream) throw cameraError(lastErr);
+    if (this.stopped) { stream.getTracks().forEach((t) => t.stop()); return; } // closed while opening
+    this.stream = stream;
     const settings = this.stream.getVideoTracks()[0]?.getSettings?.() || {};
     // Laptops report no facingMode and use the front camera: mirror those.
     this.viewport.classList.toggle('mirror', settings.facingMode !== 'environment');
@@ -345,6 +359,7 @@ export class PalmScanner {
   }
 
   stop() {
+    this.stopped = true;
     this.pause();
     this.stopCamera();
   }
@@ -356,6 +371,20 @@ function majority(labels) {
   const share = Math.max(left, labels.length - left) / labels.length;
   if (share < 0.75) return null;
   return left * 2 > labels.length ? 'Left' : 'Right';
+}
+
+function cameraError(err) {
+  const name = err?.name || '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return new ScanError('camera_denied', 'Camera access is blocked. Allow it in the browser settings, then try again.');
+  }
+  if (['NotReadableError', 'TrackStartError', 'AbortError'].includes(name)) {
+    return new ScanError('camera_busy', 'The camera is busy. Close other tabs or apps using the camera, then tap Scan again.');
+  }
+  if (['NotFoundError', 'DevicesNotFoundError', 'OverconstrainedError'].includes(name)) {
+    return new ScanError('no_camera', 'No camera was found on this device.');
+  }
+  return new ScanError('camera_failed', `The camera could not start${name ? ` (${name})` : ''}. Tap Scan again.`);
 }
 
 export class ScanError extends Error {

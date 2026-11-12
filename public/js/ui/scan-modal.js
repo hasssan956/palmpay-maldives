@@ -164,7 +164,10 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     if (!act || busy) return;
     if (act === 'close') close(null);
     if (act === 'flip') { try { await scanner.flip(); } catch (err) { setHint('Camera unavailable', err.message); } }
-    if (act === 'retry') { scanner.resume(); scanOnce(); }
+    if (act === 'retry') {
+      if (cameraFailed) { $('.demo-pick').hidden = true; startScanner(); } // camera never opened: start again
+      else { scanner.resume(); scanOnce(); }
+    }
     if (act === 'demo') {
       const pick = $('.demo-pick');
       const choices = await demoChoices();
@@ -182,14 +185,24 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     handle({ demo: { id } });
   });
 
-  try {
-    await scanner.start();
-    scanOnce();
-  } catch (err) {
-    setHint('Scanner unavailable', err.message);
-    showResult(false);
-    if (config.demoMode && demoChoices) $('[data-act="demo"]')?.click();
+  let cameraFailed = false;
+  async function startScanner() {
+    cameraFailed = false;
+    resultEl.classList.remove('show');
+    retryBtn.hidden = true;
+    try {
+      await scanner.start();
+      if (!scanner.running) return; // closed while starting
+      scanOnce();
+    } catch (err) {
+      cameraFailed = true;
+      setHint('Scanner unavailable', err.message);
+      showResult(false);
+      retryBtn.hidden = false;
+      if (config.demoMode && demoChoices && err.code !== 'camera_busy') $('[data-act="demo"]')?.click();
+    }
   }
+  startScanner();
 
   return done;
 }
