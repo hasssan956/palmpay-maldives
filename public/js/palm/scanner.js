@@ -14,7 +14,7 @@
 import {
   extractFeatures, frameProblem, medianVector, spreadOf, FEATURE_MODEL,
   tremorScore, handBox, frameAroundHand, glareShare, evaluateLiveness, PALM_OUTLINE,
-} from '/shared/palm-features.js';
+} from '/shared/palm-features.js?v=3'; // ?v= skips any copy a phone cached before app code was set to no-cache
 
 const TARGET_FRAMES = 18;
 const MAX_SPREAD = 0.09;

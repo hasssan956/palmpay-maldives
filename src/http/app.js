@@ -130,9 +130,14 @@ export function createApp(c) {
 
   // --- Static frontend, shared feature code and the vendored MediaPipe runtime ---
   app.get(['/pos', '/enroll'], (req, res) => res.redirect(302, req.path === '/pos' ? '/terminal' : '/bank#palmpay'));
-  app.use('/shared', express.static(join(root, 'shared'), { maxAge: '1h' }));
+  // App code is always revalidated (cheap: an ETag check). If a phone kept an
+  // old copy of one file and fetched a new copy of another, the two may not fit
+  // and the page would not load. Only the MediaPipe runtime, which never changes
+  // at the same URL, is cached long-term.
+  const appCode = { maxAge: 0, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') };
+  app.use('/shared', express.static(join(root, 'shared'), appCode));
   app.use('/vendor/mediapipe', express.static(join(root, 'node_modules/@mediapipe/tasks-vision'), { maxAge: '7d', immutable: true }));
-  app.use(express.static(join(root, 'public'), { extensions: ['html'], maxAge: config.nodeEnv === 'production' ? '1h' : 0 }));
+  app.use(express.static(join(root, 'public'), { extensions: ['html'], ...appCode }));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
