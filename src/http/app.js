@@ -45,7 +45,8 @@ export function createApp(c) {
     res.json({
       currency: config.currency, demoMode: config.demoMode, allowReset: config.allowReset, exposeMatchDebug: config.exposeMatchDebug,
       defaultPalmLimit: config.defaultPalmLimit, maxPalmLimit: config.maxPalmLimit, maxScanAttempts: config.maxScanAttempts,
-      biometric: { provider: config.biometricProvider, model: c.matcher.model, handModelUrl: config.handModelUrl, threshold: config.matchThreshold },
+      biometric: { provider: config.biometricProvider, model: c.matcher.model, handModelUrl: config.handModelUrl, threshold: config.matchThreshold,
+        palmLines: config.palmLines, linesThreshold: config.linesThreshold },
       liveness: { mode: config.livenessMode, checks: config.livenessChecks, minTremor: config.minTremor,
         maxDeviceScore: config.maxDeviceScore, maxGlare: config.maxGlare },
       demoKeys,

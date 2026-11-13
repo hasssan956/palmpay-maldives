@@ -39,11 +39,19 @@ export const config = Object.freeze({
 
   // Biometrics: "hand-geometry" (MediaPipe landmarks, demo grade) or a vendor later.
   biometricProvider: env.BIOMETRIC_PROVIDER || 'hand-geometry',
-  matchThreshold: num(env.MATCH_THRESHOLD, 0.075),
+  // Hand shape: with palm lines on it is only a loose first filter (0.10);
+  // with palm lines off it is the whole decision (0.075).
+  matchThreshold: num(env.MATCH_THRESHOLD, env.PALM_LINES === 'off' ? 0.075 : 0.1),
   matchMargin: num(env.MATCH_MARGIN, 0.8),
   // Same as the match threshold by default: a palm close enough to pay as
   // someone else is close enough to block a second enrolment.
-  duplicateThreshold: num(env.DUPLICATE_THRESHOLD, num(env.MATCH_THRESHOLD, 0.075)),
+  duplicateThreshold: num(env.DUPLICATE_THRESHOLD, num(env.MATCH_THRESHOLD, env.PALM_LINES === 'off' ? 0.075 : 0.1)),
+  // Palm lines: what actually tells people apart (shared/palm-lines.js).
+  //   require (a match needs shape AND palm lines) | off (shape only)
+  palmLines: env.PALM_LINES === 'off' ? 'off' : 'require',
+  // 0 = identical palm lines, ~0.43 = a stranger. On 152 palm photos of 58 hands,
+  // 0.35 accepted a stranger 0.2% of the time and refused the owner 4.6%.
+  linesThreshold: num(env.LINES_THRESHOLD, 0.35),
   // Liveness checks against photos, screens and videos (demo grade).
   //   off | observe (measure and show the scores, never block) | enforce (block failed scans)
   livenessMode: ['off', 'observe', 'enforce'].includes(env.LIVENESS_MODE) ? env.LIVENESS_MODE : 'observe',

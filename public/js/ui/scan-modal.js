@@ -95,7 +95,7 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
   const scanner = new PalmScanner({
     video: $('video'), canvas: $('canvas'), viewport: $('.viewport'),
     modelUrl: config.biometric.handModelUrl, onHint: setHint, onProgress: setProgress,
-    liveness: config.liveness, onLiveness: (l) => { liveLine = livenessText(l); showDebug(); },
+    palmLines: config.biometric.palmLines, liveness: config.liveness, onLiveness: (l) => { liveLine = livenessText(l); showDebug(); },
     onError: (err) => {
       console.error('Scanner:', err);
       if (!errorLine) { errorLine = `Scanner error: ${String(err?.message || err).slice(0, 120)}`; showDebug(); }
@@ -137,7 +137,9 @@ export async function openScanModal({ eyebrow, amount, title, submit, demoChoice
     el.classList.remove('verifying');
     busy = false;
     if (res.debug) {
-      matchLine = `Match: ${res.debug.status}, distance ${res.debug.distance ?? 'n/a'} (threshold ${res.debug.threshold ?? 'n/a'})`;
+      const d = res.debug;
+      matchLine = `Match: ${d.status}, shape ${d.distance ?? 'n/a'} (max ${d.threshold ?? 'n/a'})`
+        + (d.linesThreshold != null ? `, lines ${d.lines ?? 'n/a'} (max ${d.linesThreshold})` : '');
       showDebug();
     }
     showResult(res.ok);

@@ -52,8 +52,8 @@ PalmPay is a palm payment layer that **plugs into the bank apps people already u
 ## The payment flow
 
 1. The cashier types the amount. The terminal calls `POST /api/v1/payment-intents` with its key and an `Idempotency-Key`.
-2. The scan screen opens the camera. MediaPipe HandLandmarker finds 21 hand points per frame. `shared/palm-features.js` turns them into 23 bone and palm length ratios, and 18 good frames are combined.
-3. `POST /payment-intents/:id/authorize { palm }`. PalmPay identifies the palm user (best match under the threshold, clearly ahead of the runner-up) and checks the customer's limit. It marks the intent `processing`.
+2. The scan screen opens the camera. MediaPipe HandLandmarker finds 21 hand points per frame. `shared/palm-features.js` turns them into 23 bone and palm length ratios, and 18 good frames are combined. `shared/palm-lines.js` reads the palm lines from the 3 sharpest frames.
+3. `POST /payment-intents/:id/authorize { palm }`. PalmPay identifies the palm user (hand shape close enough, then the best palm-line match under the threshold, clearly ahead of the runner-up) and checks the customer's limit. It marks the intent `processing`.
 4. PalmPay calls `authorizeDebit` on the customer's bank. If the shop banks with the same bank, the transfer stays inside it. If not, the issuer sends the money over Favara and the acquirer credits the shop.
 5. PalmPay records the payment (approval code, route) and emits `payment.succeeded`. The bank app shows a notification and its balance drops. The terminal prints the receipt.
 
@@ -74,7 +74,15 @@ All calls send `Authorization: Bearer <key>`.
 
 ## What the biometric layer really is
 
-Hand geometry from a phone camera is **demo grade**. It is good for showing the experience to banks and investors with a few enrolled people. It is **not** secure enough for real money: similar hands can be confused, and its liveness check is basic. The scan screen shows the match distance so `MATCH_THRESHOLD` can be tuned with real people.
+Hand geometry from a phone camera is **demo grade**. It is good for showing the experience to banks and investors with a few enrolled people. It is **not** secure enough for real money, and its liveness check is basic.
+
+**Palm lines.** Hand shape alone barely differs between people: on 152 palm photos of 58 hands (from the public 11k Hands set), two *different* people scored a median shape distance of 0.071, under the old 0.075 cut-off, so a stranger's hand often paid as someone else. A payment now needs the palm's lines and creases to match as well (`shared/palm-lines.js`):
+
+1. A square patch of the palm is cut out, lined up with the index and little-finger knuckles, so it is the same patch of skin whatever the hand's angle or distance.
+2. It becomes a competitive code (CompCode, Kong & Zhang 2004): on a 24 x 24 grid, which of 6 directions the darkest line runs in. Cells with no clear line are masked out.
+3. Two codes are compared by how far apart those directions are, allowing a small shift: 0 = identical, about 0.43 = a stranger.
+
+Each scan keeps the 3 sharpest palm patches; registration stores them with the shape. A match needs the shape under `MATCH_THRESHOLD` (0.10, a loose first filter) **and** the palm lines under `LINES_THRESHOLD` (0.35). On the photo set, 0.35 accepted a stranger 0.2% of the time and refused the owner 4.6% of the time per single photo pair; a live scan compares 3 frames against 3, which helps the owner. Phone lighting and focus are worse than that set, so tune with the `lines` value on the scan screen. Palms registered before palm lines existed have none and must be registered again. `PALM_LINES=off` goes back to shape only (not safe).
 
 **Liveness checks.** Three cheap checks run on the same camera frames, all in `shared/palm-features.js`:
 

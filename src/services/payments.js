@@ -106,7 +106,9 @@ export function createPaymentService({ uow, matcher, banks, config }) {
         if (!check.ok) {
           throw invalid(check.reason === 'not_live'
             ? 'This did not look like a live hand. Hold your own hand up to the camera, not a photo or a screen.'
-            : 'The palm scan was not usable. Hold your whole hand inside the outline and scan again.', { reason: check.reason, failed: check.failed });
+            : check.reason === 'no_palm_lines'
+              ? 'Your palm lines could not be read. Hold your whole palm flat, facing the camera, in good light.'
+              : 'The palm scan was not usable. Hold your whole hand inside the outline and scan again.', { reason: check.reason, failed: check.failed });
         }
       }
 
@@ -131,7 +133,8 @@ export function createPaymentService({ uow, matcher, banks, config }) {
           match = { ...m, palmUserId: m.customerId, method: 'palm' };
         }
         const debug = config.exposeMatchDebug
-          ? { status: match.status, distance: match.distance, threshold: match.threshold, candidates: match.candidates?.map((c) => ({ distance: c.distance })) }
+          ? { status: match.status, distance: match.distance, threshold: match.threshold, lines: match.lines, linesThreshold: match.linesThreshold,
+              candidates: match.candidates?.map((c) => ({ distance: c.distance, lines: c.lines })) }
           : undefined;
 
         if (match.status !== 'match') {

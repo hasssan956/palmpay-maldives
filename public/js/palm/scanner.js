@@ -15,6 +15,7 @@ import {
   extractFeatures, frameProblem, medianVector, spreadOf, FEATURE_MODEL,
   tremorScore, handBox, frameAroundHand, glareShare, evaluateLiveness, PALM_OUTLINE,
 } from '/shared/palm-features.js?v=3'; // ?v= skips any copy a phone cached before app code was set to no-cache
+import { LINES_MODEL, palmRegion, samplePalm, sharpness, palmCode } from '/shared/palm-lines.js?v=1';
 
 const TARGET_FRAMES = 18;
 const MAX_SPREAD = 0.09;
@@ -23,6 +24,8 @@ const DEVICE_SIZE = 192; // pixels, longest side of the frame the border check w
 const DEVICE_WINDOW_MS = 5000; // a device seen in the last 5 s counts, so showing it from afar then moving close doesn't help
 const GLARE_EVERY = 3; // measure glare on every 3rd frame of the reading
 const GLARE_SIZE = 96; // pixels, longest side of the palm crop
+const LINES_EVERY = 2; // grab the palm patch on every 2nd frame of the reading
+const LINES_CODES = 3; // the sharpest 3 patches become the palm-line codes
 
 const HINTS = {
   loading: ['Starting the scanner', 'Allow camera access if your browser asks.'],
@@ -31,6 +34,7 @@ const HINTS = {
   too_close: ['Move back a little', 'Your whole hand needs to be in view.'],
   off_center: ['Centre your hand', 'Line it up with the outline.'],
   fingers_closed: ['Spread your fingers', 'Keep your hand flat and open.'],
+  palm_unclear: ['Show your whole palm', 'Hold your palm flat and facing the camera, in good light.'],
   reading: ['Hold still', 'Reading your palm.'],
   unsteady: ['Keep your hand steady', 'Starting the reading again.'],
   two_hands: ['Show one hand only', 'Keep your other hand out of view.'],
@@ -70,10 +74,11 @@ export class PalmScanner {
    *          modelUrl: string, onHint: Function, onProgress: Function,
    *          liveness?: {mode: 'off'|'observe'|'enforce', checks: string[], minTremor: number,
    *                      maxDeviceScore: number, maxGlare: number},
-   *          onLiveness?: Function}} opts
+   *          onLiveness?: Function, palmLines?: 'require'|'off'}} opts
    */
   constructor(opts) {
     Object.assign(this, opts);
+    this.palmPatches = [];
     this.liveness ||= { mode: 'off', checks: [] };
     this.checks = this.liveness.mode === 'off' ? [] : this.liveness.checks || [];
     this.imageFrames = [];
@@ -149,6 +154,7 @@ export class PalmScanner {
     this.frames = [];
     this.imageFrames = [];
     this.glareSamples = [];
+    this.palmPatches = [];
     this.hands = [];
     this.onProgress(0);
     this.viewport.classList.remove('locked');
@@ -205,6 +211,9 @@ export class PalmScanner {
     if (this.checks.includes('glare') && this.frames.length % GLARE_EVERY === 1) {
       try { this.sampleGlare(image); } catch (err) { this.onError?.(err); }
     }
+    if (this.palmLines !== 'off' && this.frames.length % LINES_EVERY === 1) {
+      try { this.samplePalmPatch(image); } catch (err) { this.onError?.(err); }
+    }
     if (side && side.score >= 0.6) (this.hands ||= []).push(side.categoryName);
     this.viewport.classList.add('locked');
     this.onHint(...HINTS.reading);
@@ -238,7 +247,18 @@ export class PalmScanner {
           return;
         }
       }
-      const probe = { model: FEATURE_MODEL, vector: median, hand, quality: { frames: this.frames.length, spread }, liveness };
+      // Palm lines: codes from the sharpest patches.
+      let palmLines;
+      if (this.palmLines !== 'off') {
+        const best = [...this.palmPatches].sort((a, b) => b.sharp - a.sharp).slice(0, LINES_CODES);
+        if (best.length < 2) {
+          this.reset();
+          this.onHint(...HINTS.palm_unclear);
+          return;
+        }
+        palmLines = { model: LINES_MODEL, codes: best.map((p) => palmCode(p.roi)) };
+      }
+      const probe = { model: FEATURE_MODEL, vector: median, hand, quality: { frames: this.frames.length, spread }, liveness, palmLines };
       const snapshot = this.snapshot();
       this.pause();
       this.resolveCapture?.({ probe, snapshot });
@@ -284,6 +304,28 @@ export class PalmScanner {
     } catch (err) {
       this.onError?.(err); // no sample this frame; the scan carries on
     }
+  }
+
+  // Cuts the palm patch out of the full-resolution frame (only the area around
+  // the palm is read back from the camera, to keep it quick on phones).
+  samplePalmPatch(image) {
+    const v = this.video;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return;
+    const region = palmRegion(image, vw, vh);
+    const r = (region.side / 2) * Math.SQRT2 + 2;
+    const x0 = Math.max(0, Math.floor(region.center[0] - r)), y0 = Math.max(0, Math.floor(region.center[1] - r));
+    const cw = Math.min(vw, Math.ceil(region.center[0] + r)) - x0, ch = Math.min(vh, Math.ceil(region.center[1] + r)) - y0;
+    if (cw < 16 || ch < 16) return;
+    const c = (this.patchCanvas ||= document.createElement('canvas'));
+    c.width = cw; c.height = ch;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(v, x0, y0, cw, ch, 0, 0, cw, ch);
+    const px = g.getImageData(0, 0, cw, ch).data;
+    const gray = new Float32Array(cw * ch);
+    for (let i = 0; i < gray.length; i++) gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    const roi = samplePalm(gray, cw, ch, region, x0, y0); // null if the palm is not fully in view
+    if (roi) this.palmPatches.push({ roi, sharp: sharpness(roi) });
   }
 
   sampleGlare(image) {
