@@ -147,7 +147,8 @@ src/
   adapters/events/         memory-bus.js
   sim-banks/               STAND-IN for BML/MIB core banking (demo only)
   http/app.js              /api/v1 partner API, /sim-bank demo backend, static files
-shared/palm-features.js    palm feature extraction (browser + tests)
+shared/palm-features.js    hand shape and liveness scores (browser + tests)
+shared/palm-lines.js       palm-line patch, code and matching (browser + server + tests)
 public/                    /bank demo bank app, /terminal shop counter
 db/migrations/             PostgreSQL schema for PalmPay's data
 test/                      node:test suite
